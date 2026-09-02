@@ -1,0 +1,39 @@
+{
+  "name": "dsh-v-skill-links",
+  "description": "V 技能映射 — DeepSeek Harness Web 的 '/' 菜单插件：映射技能（配置目录的一级子目录含 SKILL.md，选中注入全文）+ 自定义指令（followup 型）+ 快捷按钮（输入框下方网格，点击追加 Prompt 进输入框，可选自动发送）+ 设置页可视化编辑（目录/指令/按钮 CRUD）。",
+  "version": "0.3.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "scripts": {
+    "check": "node --check lib/index.js && node --check lib/client.js",
+    "test": "node test/scan-smoke.mjs && node test/inject-smoke.mjs && node test/settings-schema-smoke.mjs && node test/buttons-schema-smoke.mjs && node test/settings-card-smoke.mjs && node test/buttons-reorder-smoke.mjs && node test/host-apply-smoke.mjs && node test/client-shape-smoke.mjs && node test/quick-buttons-client-smoke.mjs"
+  }
+}

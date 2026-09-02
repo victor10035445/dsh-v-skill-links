@@ -1,0 +1,12 @@
+# dsh-v-skill-links 服务端补丁层：把插件注册进 cordis loader。
+# 宿主端提供 /api/v-skill-links/* 路由与 agent/pre-step 注入；
+# client-modules 发现本包的 dsh.client 声明后自动把 lib/client.js 编入 /plugins 启动图。
+#
+# 技能目录在用户的补丁层（$DSH_HOME/profiles/web/cordis.patch.yml）里配置：
+#   - id: dsh-v-skill-links
+#     config:
+#       directories:
+#         - F:/xxx/skills
+- insert:
+    - id: dsh-v-skill-links
+      name: dsh-v-skill-links

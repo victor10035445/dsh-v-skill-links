@@ -1,0 +1,16 @@
+# npm
+node_modules/
+*.tgz
+# 系统文件
+.DS_Store
+Thumbs.db
+Desktop.ini
+# AI 编辑器本地配置与技能（不入仓库，本地保留）
+.claude/
+.trae/
+# OpenSpec 开发过程目录（specs/changes 归档，不入仓库）
+openspec/
+# 运行时数据目录（DSH 宿主书签等，本地生成，不入仓库）
+.jiuyu/
+# 日志
+*.log
