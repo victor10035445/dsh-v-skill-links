@@ -23,6 +23,8 @@ DeepSeek Harness Web 的 **「/」菜单映射技能** 插件。
 
 ## 安装
 
+> **环境要求**：Harness（`dsh`）**0.1.2-rc.1 及以上**。客户端依赖的快照 store（`@deepseek-ai/dsh-client-store`）与 UI 原语 / 插槽工具均由 web shell 静态种子表提供；更早版本没有该种子词（旧版经 `@deepseek-ai/dsh-client-runtime` 动态包提供的运行时已被 harness 移除），插件将无法加载。
+
 **方式一 · GitHub 地址直装（推荐）**——本插件手写零构建、无任何安装期脚本，git 安装无需构建授权：
 
 ```sh
@@ -45,7 +47,7 @@ dsh plugin --profile web add "link:<克隆路径>"
 **方式三 · tgz 打包安装**：
 
 ```sh
-npm pack                                # 产出 dsh-v-skill-links-0.3.0.tgz
+npm pack                                # 产出 dsh-v-skill-links-0.4.1.tgz
 dsh plugin --profile web add "<tgz 的绝对路径>"
 ```
 
@@ -144,7 +146,7 @@ description: 按团队规范审查当前改动并输出分级意见
 - **只扫一级子目录**：更深的目录不索引（与需求一致）。
 - **快捷按钮的官方槽位口径**：`conversation.composer.dock` 官方注释建议「可点击控件放工具行」——那是针对环境读数的风格建议，非技术限制；按钮网格装不进一行高的工具行，本插件知情采纳该槽位（几何上正是「输入框下方」）。
 - **「与输入区同宽」是条目自我约束（对齐锚点 C 定稿）**：dock 槽契约给的是宽度列，渲染器对 list 条目 Fragment 直出（无 DOM 包裹层）——网格以 `max-width: var(--dsh-chat-content-width)` + `margin: 0 auto` 自我约束，左缘与输入文本左缘重合（官方 stats 行同款宽度策略）；列 `minmax(96px, max-content)` + 单钮 `max-width: 220px`，按钮随内容收缩、自左聚拢，长名封顶截断。
-- **新增会话首屏借用 `conversation.input.dock` 渲染 hero 网格**：官方没有「hero 卡片下方」的座位，且 `conversation.composer.dock` 渲染点被 `!hero` 硬门控；`conversation.input.dock` 渲染点只看输入区存在、不看 hero，blank-hero 下照样渲染——本插件以它注册 hero 条目（id `v-quick-buttons-hero`、order 0），用 CSS `order` 把网格排到 hero 卡片正下方，组件按 owner 份额 `session.composerPhase !== 'blank'` 返回 null、与会话态的 composer.dock 条目互斥。**迁移门**：上游 `!hero` 门控对 stats 行本属过度保守，若放宽为 `zone !== void 0`，删除 hero 条目即可一行迁回 composer.dock（文本列对齐已由锚点 C 保证）。
+- **新增会话首屏借用 `conversation.input.dock` 渲染 hero 网格**：官方没有「hero 卡片下方」的座位，且 `conversation.composer.dock` 渲染点只在会话态出现（`variant === "composer"`，hero 布局不渲染）；`conversation.input.dock` 渲染点只看 zone（session+input）存在、hero 与会话态都渲染——本插件以它注册 hero 条目（id `v-quick-buttons-hero`、order 0），用 CSS `order` 把网格排到 hero 卡片正下方，组件按 owner 份额 SessionSnapshot 的**原始字段**自门控（`openState === 'open' && blank && !running && !promptAttempted` 才渲染）、与会话态的 composer.dock 条目互斥。**门控不得依赖派生相位字段**：0.1.2-rc.1 已把 `composerPhase` 从会话快照移除（phase 机器移入 ui-conversation 的 `conversationPhase()`，由 blank/awaitingFirstTurn/running/promptAttempted/openState 现场推导），历史上读 `session.composerPhase` 的门控因此恒不成立、新会话首屏按钮整体消失（fix-hero-gating-snapshot-fields 修复）。
 - **快捷按钮的悬停提示用原生 `title`**：官方 primitives 的 `Tooltip` 需要子元素 ref 转发契约（React 18 函数组件不满足），按约定退化为原生 `title` 展示完整 Prompt。
 - **composer 被其他插件 block 时按钮仍可点击**：dock 的 owner 份额拿不到 block 信息；此时追加作用在暂时不可见、不可提交的草稿上，block 清除后可见、可撤销，无破坏性。
 - **子代理会话的输入框下方同样出现按钮网格**：dock 是 session 作用域，配置是全局的——接受此行为。

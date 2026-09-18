@@ -36,6 +36,13 @@ const primitivesStub = { Button: (props, ...children) => ({ type: "Button", prop
 /* 官方 slots 工具桩：resolveSlotLabel 解析函数标签。 */
 const slotsPkgStub = { resolveSlotLabel: (label) => (typeof label === "function" ? label() : label) };
 let storeCreated = 0;
+/* 模拟真实 store（@deepseek-ai/dsh-client-store）的冻结语义：set 前对入参递归 Object.freeze
+ * 再整态替换（fix-dsh-012-compat design D4）；编辑路径因此在冻结输入上受测（design D3 不变量）。 */
+const deepFreeze = (value) => {
+	if (value === null || typeof value !== "object") return value;
+	for (const key of Object.keys(value)) deepFreeze(value[key]);
+	return Object.freeze(value);
+};
 const runtimeStub = {
 	createSnapshotStore: (init) => {
 		storeCreated += 1;
@@ -44,7 +51,7 @@ const runtimeStub = {
 		return {
 			getSnapshot: () => state,
 			subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
-			set: (next) => { state = next; for (const l of [...listeners]) l(); },
+			set: (next) => { state = deepFreeze(next); for (const l of [...listeners]) l(); },
 			update: () => {},
 		};
 	},
@@ -58,7 +65,7 @@ globalThis.fetch = async (url, init) => {
 		json: async () => ({ ok: true, name: JSON.parse(init.body).name }),
 	};
 };
-const requireStub = (spec) => (spec === "react" ? reactStub : spec === "@deepseek-ai/dsh-client-runtime/client" ? runtimeStub : spec === "@deepseek-ai/dsh-client-ui-primitives" ? primitivesStub : spec === "@deepseek-ai/dsh-client-ui-slots" ? slotsPkgStub : null);
+const requireStub = (spec) => (spec === "react" ? reactStub : spec === "@deepseek-ai/dsh-client-store" ? runtimeStub : spec === "@deepseek-ai/dsh-client-ui-primitives" ? primitivesStub : spec === "@deepseek-ai/dsh-client-ui-slots" ? slotsPkgStub : null);
 
 new Function("window", "require", code)(windowStub, requireStub);
 assert.ok(definition, "捕获到 load 定义");

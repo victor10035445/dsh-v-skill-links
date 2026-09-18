@@ -23,6 +23,8 @@ Purely additive: the plugin never replaces or disables official plugins; mapped 
 
 ## Install
 
+> **Environment requirement**: Harness (`dsh`) **0.1.2-rc.1 or later**. The snapshot store (`@deepseek-ai/dsh-client-store`), UI primitives and slot tools the client depends on are all provided by the web shell's static seed table; earlier versions lack that seed word (the runtime formerly provided via the `@deepseek-ai/dsh-client-runtime` dynamic package has been removed from the harness), and the plugin will fail to load.
+
 **Option 1 · Direct install from GitHub (recommended)** — this plugin is hand-written with zero build steps and no install-time scripts, so git install needs no build approval:
 
 ```sh
@@ -45,7 +47,7 @@ dsh plugin --profile web add "link:<clone path>"
 **Option 3 · tgz package install**:
 
 ```sh
-npm pack                                # produces dsh-v-skill-links-0.3.0.tgz
+npm pack                                # produces dsh-v-skill-links-0.4.1.tgz
 dsh plugin --profile web add "<absolute path to tgz>"
 ```
 
@@ -144,7 +146,7 @@ Frontmatter is optional: the skill name falls back to the directory name `code-r
 - **First-level subdirectories only**: deeper directories are not indexed (by design).
 - **Quick buttons' official slot reading**: the official comment on `conversation.composer.dock` suggests "clickable controls belong on the tool row" — a style note for environment readouts, not a technical limit; a button grid cannot fit a one-line-high tool row, and this plugin adopts the slot knowingly (geometrically it is exactly "below the composer").
 - **"Same width as the input area" is entry self-constraint (alignment anchor C, finalized)**: the dock slot contract provides a width column; the renderer emits list entries as bare Fragments (no DOM wrapper) — the grid self-constrains with `max-width: var(--dsh-chat-content-width)` + `margin: 0 auto`, left edge aligned with input text (the official stats-row width strategy); columns `minmax(96px, max-content)` + per-button `max-width: 220px`, buttons shrink to content and cluster left, long names truncate at the cap.
-- **New-session first screen borrows `conversation.input.dock` for the hero grid**: the official layout has no seat "under the hero card", and the `conversation.composer.dock` render point is hard-gated by `!hero`; the `conversation.input.dock` render point only checks the composer exists, not hero, and still renders in blank-hero — so this plugin registers the hero entry there (id `v-quick-buttons-hero`, order 0) and uses CSS `order` to place the grid right under the hero card; per the owner's share the component returns null when `session.composerPhase !== 'blank'`, mutually exclusive with the session-mode composer.dock entry. **Migration gate**: the upstream `!hero` gate is over-conservative for the stats row; if relaxed to `zone !== void 0`, deleting the hero entry migrates back to composer.dock in one line (text-column alignment is already guaranteed by anchor C).
+- **New-session first screen borrows `conversation.input.dock` for the hero grid**: the official layout has no seat "under the hero card", and the `conversation.composer.dock` render point only appears in session mode (`variant === "composer"`, not rendered in hero layout); the `conversation.input.dock` render point only checks the zone (session+input) exists and renders in both hero and session modes — so this plugin registers the hero entry there (id `v-quick-buttons-hero`, order 0) and uses CSS `order` to place the grid right under the hero card; per the owner's share of the `SessionSnapshot` **raw fields** the component self-gates (renders only when `openState === 'open' && blank && !running && !promptAttempted`), mutually exclusive with the session-mode composer.dock entry. **Gating MUST NOT depend on derived phase fields**: 0.1.2-rc.1 removed `composerPhase` from the session snapshot (the phase machine moved into ui-conversation's `conversationPhase()`, derived on the fly from blank/awaitingFirstTurn/running/promptAttempted/openState); historically a gate reading `session.composerPhase` therefore became permanently false and the first-screen button grid disappeared entirely (fixed by fix-hero-gating-snapshot-fields).
 - **Quick button hover hints use native `title`**: the official primitives `Tooltip` requires a child ref-forwarding contract (React 18 function components don't satisfy it), so per convention it degrades to native `title` showing the full Prompt.
 - **Buttons remain clickable when the composer is blocked by other plugins**: the dock's owner share cannot see block info; appends then target a temporarily invisible, non-submittable draft — visible and undoable once the block clears, non-destructive.
 - **The button grid also appears below sub-agent session composers**: the dock is session-scoped while the config is global — accepted behavior.

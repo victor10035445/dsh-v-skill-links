@@ -12,5 +12,7 @@ Desktop.ini
 openspec/
 # 运行时数据目录（DSH 宿主书签等，本地生成，不入仓库）
 .jiuyu/
+# 本地并行分支副本（jiuyu 品牌，功能移植后的源存档，不入仓库）
+dsh-jiuyu-skill-links/
 # 日志
 *.log

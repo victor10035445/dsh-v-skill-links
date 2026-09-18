@@ -31,6 +31,13 @@ const reactStub = {
 };
 const primitivesStub = { Button: (props, ...children) => ({ type: "Button", props, children }) };
 const slotsPkgStub = { resolveSlotLabel: (label) => (typeof label === "function" ? label() : label) };
+/* 模拟真实 store（@deepseek-ai/dsh-client-store）的冻结语义：set 前对入参递归 Object.freeze
+ * 再整态替换（fix-dsh-012-compat design D4）；编辑路径因此在冻结输入上受测（design D3 不变量）。 */
+const deepFreeze = (value) => {
+	if (value === null || typeof value !== "object") return value;
+	for (const key of Object.keys(value)) deepFreeze(value[key]);
+	return Object.freeze(value);
+};
 const runtimeStub = {
 	createSnapshotStore: (init) => {
 		let state = init;
@@ -38,12 +45,12 @@ const runtimeStub = {
 		return {
 			getSnapshot: () => state,
 			subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
-			set: (next) => { state = next; for (const l of [...listeners]) l(); },
+			set: (next) => { state = deepFreeze(next); for (const l of [...listeners]) l(); },
 			update: () => {},
 		};
 	},
 };
-const requireStub = (spec) => (spec === "react" ? reactStub : spec === "@deepseek-ai/dsh-client-runtime/client" ? runtimeStub : spec === "@deepseek-ai/dsh-client-ui-primitives" ? primitivesStub : spec === "@deepseek-ai/dsh-client-ui-slots" ? slotsPkgStub : null);
+const requireStub = (spec) => (spec === "react" ? reactStub : spec === "@deepseek-ai/dsh-client-store" ? runtimeStub : spec === "@deepseek-ai/dsh-client-ui-primitives" ? primitivesStub : spec === "@deepseek-ai/dsh-client-ui-slots" ? slotsPkgStub : null);
 
 new Function("window", "require", code)(windowStub, requireStub);
 assert.ok(definition, "捕获到 load 定义");
@@ -217,9 +224,45 @@ for (const phase of ["adjudicating", "claimed", "submitting"]) {
 const gPlain = Grid({ input: { draft: "", phase: "plain" }, inputActions: makeActions(), buttons: dockProps.buttons, t: (k) => k });
 for (const b of childrenOf(gPlain)) assert.equal(b.props.disabled, false, "phase=plain 时按钮可用");
 
-/* ── 5g. hero 门控（design D10）：仅 blank 渲染且带修饰类；非 blank / 缺 session 返回 null ── */
+/* 5f+. 草稿来源（fix-dsh-012-compat design D5）：新版 composer.dock 槽位无 owner 份额
+ * （不传 props.input），组件 SHALL 经标准工具 useInput 读当帧 InputState —— 点击追加
+ * 而非替换（回归：原实现读 props.input 得 undefined → 草稿被整框替换）。 */
+const actions3 = makeActions();
+const grid3 = Grid({
+	useInput: (selector) => selector({ draft: "帮我看看", phase: "plain" }),
+	inputActions: actions3,
+	buttons: dockProps.buttons,
+	t: (k) => k,
+});
+childrenOf(grid3)[0].props.onClick();
+assert.deepEqual(actions3.calls.setDraft, ["帮我看看\n使用 xxx 技能做 xxx 事"], "无 owner 份额时经 useInput 追加（不替换）");
+assert.equal(actions3.calls.submit, 1, "useInput 路径 autoSend=true 即提交（与 5d 同口径）");
+/* phase 门控同样读 useInput 快照 */
+const gHookBusy = Grid({
+	useInput: (selector) => selector({ draft: "", phase: "submitting" }),
+	inputActions: makeActions(),
+	buttons: dockProps.buttons,
+	t: (k) => k,
+});
+for (const b of childrenOf(gHookBusy)) assert.equal(b.props.disabled, true, "phase 经 useInput 读取（submitting 禁用）");
+/* useInput 与 owner 份额并存（hero：InputZone.input）时 useInput 优先，二者同形等价 */
+const actions4 = makeActions();
+const grid4 = Grid({
+	useInput: (selector) => selector({ draft: "hook草稿", phase: "plain" }),
+	input: { draft: "owner草稿", phase: "plain" },
+	inputActions: actions4,
+	buttons: dockProps.buttons,
+	t: (k) => k,
+});
+childrenOf(grid4)[0].props.onClick();
+assert.deepEqual(actions4.calls.setDraft, ["hook草稿\n使用 xxx 技能做 xxx 事"], "useInput 优先于 owner 份额");
+
+/* ── 5g. hero 门控（design D10；fix-hero-gating-snapshot-fields D1）：仅空白会话首屏渲染
+ *      且带修饰类；非 blank / 缺 session 返回 null。0.1.2-rc.1 起 SessionSnapshot 不再携带
+ *      composerPhase 派生字段，fixture 一律用原始字段（openState/blank/running/promptAttempted）。 */
+const BLANK_SNAPSHOT = { openState: "open", blank: true, running: false, promptAttempted: false };
 const heroBlank = Grid({
-	session: { composerPhase: "blank" },
+	session: BLANK_SNAPSHOT,
 	input: { draft: "", phase: "plain" },
 	inputActions: makeActions(),
 	buttons: heroProps.buttons,
@@ -231,7 +274,7 @@ assert.equal(heroBlank.props.className, "v-qb-grid v-qb-grid--hero", "hero 修�
 /* hero 条目点击语义与 composer 条目一致（autoSend 可直接发起第一回合） */
 const heroActions = makeActions();
 const heroWithDraft = Grid({
-	session: { composerPhase: "blank" },
+	session: BLANK_SNAPSHOT,
 	input: { draft: "帮我看看", phase: "plain" },
 	inputActions: heroActions,
 	buttons: heroProps.buttons,
@@ -241,17 +284,34 @@ const heroWithDraft = Grid({
 childrenOf(heroWithDraft)[0].props.onClick();
 assert.deepEqual(heroActions.calls.setDraft, ["帮我看看\n使用 xxx 技能做 xxx 事"], "hero 条目追加语义一致");
 assert.equal(heroActions.calls.submit, 1, "hero 条目 autoSend 即提交（发起第一回合）");
-/* 非 blank（含过渡态）一律返回 null */
-for (const phase of ["engaging", "adjudicating", "submitting"]) {
+/* 非 blank（含过渡态）一律返回 null：发出首条消息（promptAttempted 粘性翻转 engaging，即使
+ * blank 尚未落地）、运行中、等待首回合、openState 未 open（loading/cold/error）、空快照 */
+for (const [label, session] of Object.entries({
+	"promptAttempted（发送已开始，blank 未落地）": { ...BLANK_SNAPSHOT, promptAttempted: true },
+	"running（运行中）": { ...BLANK_SNAPSHOT, blank: false, running: true, promptAttempted: true },
+	"awaitingFirstTurn（等待首回合）": { ...BLANK_SNAPSHOT, blank: false, awaitingFirstTurn: true, promptAttempted: true },
+	"openState=loading（未 open）": { ...BLANK_SNAPSHOT, openState: "loading" },
+	"空快照（字段全缺）": {},
+})) {
 	assert.equal(Grid({
-		session: { composerPhase: phase },
+		session,
 		input: { draft: "", phase: "plain" },
 		inputActions: makeActions(),
 		buttons: heroProps.buttons,
 		hero: true,
 		t: (k) => k,
-	}), null, `composerPhase=${phase} 时 hero 条目返回 null`);
+	}), null, `session ${label} 时 hero 条目返回 null`);
 }
+/* 回归守卫（fix-hero-gating-snapshot-fields）：旧形状快照（仅带已被上游移除的
+ * composerPhase 派生字段）MUST NOT 再被当成 blank——门控不得依赖已移除字段 */
+assert.equal(Grid({
+	session: { composerPhase: "blank" },
+	input: { draft: "", phase: "plain" },
+	inputActions: makeActions(),
+	buttons: heroProps.buttons,
+	hero: true,
+	t: (k) => k,
+}), null, "旧 composerPhase 形状快照不再驱动 hero 门控（字段已移除）");
 /* 缺 session（无会话首屏，无输入机）→ 保守不渲染 */
 assert.equal(Grid({
 	input: { draft: "", phase: "plain" },
@@ -262,7 +322,7 @@ assert.equal(Grid({
 }), null, "缺 session（无会话首屏）hero 条目返回 null");
 /* 互斥性：composer 条目不受 hero 门控——非 blank 时 hero 条目 null、composer 条目接管渲染 */
 const composerDuringSession = Grid({
-	session: { composerPhase: "engaging" },
+	session: { openState: "open", blank: false, running: true, promptAttempted: true },
 	input: { draft: "", phase: "plain" },
 	inputActions: makeActions(),
 	buttons: dockProps.buttons,

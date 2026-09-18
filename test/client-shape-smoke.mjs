@@ -46,10 +46,13 @@ assert.ok(code.includes("inputActions.setDraft(") && code.includes("inputActions
 assert.ok(code.includes("installDockCss") && code.includes("v-qb-grid") && code.includes("v-qb-btn") && code.includes("v-qb-label"), "dock 自有稳定 class（用户美化钩子）");
 assert.ok(code.includes('"data-v-button"'), "按钮带 data-v-button 属性");
 assert.ok(code.includes('require("@deepseek-ai/dsh-client-ui-primitives")'), "按钮底子 require 官方 primitives（design D6）");
-/* hero 条目（conversation.input.dock：新增会话首屏，design D10；上游 composer.dock 被 !hero 硬门控） */
+/* hero 条目（conversation.input.dock：新增会话首屏，design D10；0.1.2-rc.1 起
+   composer.dock 渲染点只在会话态（variant === "composer"）、input.dock 只看 zone 存在） */
 assert.ok(code.includes('const DOCK_HERO_ID = "v-quick-buttons-hero"') && code.includes("id: DOCK_HERO_ID"), "hero 条目 id");
 assert.ok(code.includes('"conversation.input.dock"'), "hero 条目注册输入区 dock 槽");
-assert.ok(code.includes("composerPhase") && code.includes("hero: true"), "hero 门控读 owner 份额 session.composerPhase（非 blank 返回 null）");
+assert.ok(code.includes('session.openState === "open"') && code.includes("session.blank === true")
+	&& code.includes("session.running !== true") && code.includes("session.promptAttempted !== true")
+	&& code.includes("hero: true"), "hero 门控读 SessionSnapshot 原始字段（非 blank 首屏返回 null）");
 assert.ok(code.includes("v-qb-grid--hero"), "hero 修饰类（CSS order 置于 hero 卡片下方）");
 /* 对齐锚点 C（design D1 补充）：网格自我约束文本宽度列 + 按钮左聚拢 */
 assert.ok(code.includes("minmax(96px,max-content)"), "网格列 max-content（按钮随内容收缩、自左聚拢）");
@@ -63,11 +66,12 @@ assert.ok(code.includes("exports.moveButton = moveButton"), "排序纯函数导�
 assert.ok(code.includes("face.moveButton("), "面板经 face.moveButton 提交换位（暂存-保存模型）");
 assert.ok(code.includes('"gripLabel"') && code.includes('"moveUp"') && code.includes('"moveDown"'), "词典含排序键（把手 aria-label / 上下移 title）");
 assert.ok(code.includes("--dsw-alias-border-inverted)"), "排序控件配色走官方 token（明暗主题跟随）");
-assert.ok(!/require\("(?!react"|@deepseek-ai\/dsh-client-runtime\/client"|@deepseek-ai\/dsh-client-ui-primitives"|@deepseek-ai\/dsh-client-ui-slots")/.test(code), "require 仅限 react / client-runtime / primitives / slots");
-/* 模块声明：external=静态表名（primitives），inject=graph 行（runtime） */
+assert.ok(!/require\("(?!react"|@deepseek-ai\/dsh-client-store"|@deepseek-ai\/dsh-client-ui-primitives"|@deepseek-ai\/dsh-client-ui-slots")/.test(code), "require 仅限 react / client-store / primitives / slots（均静态种子词）");
+/* 模块声明：store / primitives / slots 均为 shell 静态种子词，dsh.client 只留 platform（fix-dsh-012-compat design D2） */
 const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
-assert.deepEqual(pkg.dsh.client.external, ["@deepseek-ai/dsh-client-ui-primitives"], "external 声明官方 primitives（静态表名，无 graph 边）");
-assert.deepEqual(pkg.dsh.client.inject, ["@deepseek-ai/dsh-client-runtime"], "inject 保持 runtime graph 依赖");
+assert.ok(!("inject" in pkg.dsh.client), "无 inject 声明（种子词无需动态 graph 行）");
+assert.ok(!("external" in pkg.dsh.client), "无 external 声明（种子词无需 external）");
+assert.equal(pkg.dsh.client.platform, "web", "platform 为 web");
 
 /* 语法整体可解析（node --check 的兜底等价） */
 new Function(code);
