@@ -66,6 +66,21 @@ assert.ok(code.includes("exports.moveButton = moveButton"), "排序纯函数导�
 assert.ok(code.includes("face.moveButton("), "面板经 face.moveButton 提交换位（暂存-保存模型）");
 assert.ok(code.includes('"gripLabel"') && code.includes('"moveUp"') && code.includes('"moveDown"'), "词典含排序键（把手 aria-label / 上下移 title）");
 assert.ok(code.includes("--dsw-alias-border-inverted)"), "排序控件配色走官方 token（明暗主题跟随）");
+/* 模型绑定（add-quick-button-model）：可选注入（remote.session 声明进列表，cordis 独立服务键门）+ 官方 client remote + 显式判信封 + 先切后发 */
+assert.ok(code.includes('ctx.inject(["remote", "remote.session", "sessions"]'), "模型目录走单处可选注入，remote.session 声明在列表（cordis 独立服务键，不声明读取即抛错）");
+assert.ok(code.includes(".modelCatalog()") && code.includes(".selectModel("), "目录与切换都走官方 client remote（与会话模型菜单同源）");
+assert.ok(code.includes("response.ok !== true"), "显式判结果信封 ok（失败不抛异常，MUST NOT 只包 try/catch）");
+assert.ok(code.includes("llm/adapters-updated") && code.includes("settings/document-updated") && code.includes("credentials/reference-updated"), "目录刷新订阅官方同款三个事件");
+assert.ok(code.includes('scope.on("connection/reset"'), "连接重置清旧值");
+assert.ok(code.includes("exports.highestEffort = highestEffort") && code.includes("exports.modelKeyOf = modelKeyOf")
+	&& code.includes("exports.catalogOptions = catalogOptions") && code.includes("exports.createModelBridge = createModelBridge"),
+	"模型绑定纯函数与目录桥导出（smoke 直测）");
+assert.ok(code.includes('field === "model"') && code.includes("buttonEntry({ ...b, model: value })"), "editButton 支持 model 字段（未绑定删键）");
+assert.ok(code.includes("canSwitch: canSwitchSession(sessionId)") && code.includes("switchModel: switchSessionModel"),
+	"两处 dock inject 收 sessionId 并给出可切换判据与切换函数");
+assert.ok(code.includes("busyRef"), "in-flight 保护（切换/提交序列进行中忽略连点）");
+assert.ok(code.includes("v-sc-modelRow") && code.includes("v-sc-select") && code.includes("v-sc-modelHint"), "模型/级别下拉自有稳定 class");
+assert.ok(code.includes('const DOCK_CSS') && code.includes("v-qb-grid"), "dock 样式与模型绑定同文件共存（零新增依赖）");
 assert.ok(!/require\("(?!react"|@deepseek-ai\/dsh-client-store"|@deepseek-ai\/dsh-client-ui-primitives"|@deepseek-ai\/dsh-client-ui-slots")/.test(code), "require 仅限 react / client-store / primitives / slots（均静态种子词）");
 /* 模块声明：store / primitives / slots 均为 shell 静态种子词，dsh.client 只留 platform（fix-dsh-012-compat design D2） */
 const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));

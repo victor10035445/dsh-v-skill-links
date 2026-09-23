@@ -16,7 +16,7 @@ DeepSeek Harness Web 的 **「/」菜单映射技能** 插件：把任意本地�
 |---|---|---|
 | **映射技能** | `/` 菜单「映射技能」分组 | 选中落入 `/名字 `，发送时注入对应 `SKILL.md` 全文 |
 | **自定义指令** | `/` 菜单「自定义指令」分组 | 选中**立即把 Prompt 作为用户消息发送**进当前会话 |
-| **快捷按钮** | 输入框下方按钮网格 | 点击把 Prompt **追加**进输入框（可继续编辑）；可选**自动发送**（等同回车） |
+| **快捷按钮** | 输入框下方按钮网格 | 点击把 Prompt **追加**进输入框（可继续编辑）；可选**自动发送**（等同回车）；可绑定模型与推理等级 |
 
 共性：
 
@@ -76,6 +76,10 @@ dsh plugin --profile web add "<tgz 的绝对路径>"
         autoSend: true              # 填入后立即发送
       - name: 审查
         prompt: 请使用 /code-review 审查当前改动
+        model:                      # 可选：绑定模型（缺省 = 跟随会话当前模型）
+          provider: deepseek-official
+          model: deepseek-v4-pro
+          reasoningEffort: max      # 可选推理等级；不写 = provider/模型默认
 ```
 
 保存后补丁层热重载；若未生效则重启 `dsh web`。目录不存在不算致命——菜单空组自动隐藏，具体错误见 `/api/v-skill-links/list` 的 `directories`。
@@ -84,8 +88,21 @@ dsh plugin --profile web add "<tgz 的绝对路径>"
 
 - **技能映射**：textarea 每行一个目录，保存立即生效；
 - **自定义指令**：维护名称（小写 `a-z 0-9 _ -`）+ Prompt；
-- **快捷功能**：维护名称（可中文）+ Prompt + 自动发送勾选，行首把手拖拽或「上移 / 下移」调整顺序；
+- **快捷功能**：维护名称（可中文）+ Prompt + 自动发送勾选 + **模型/级别下拉**（模型候选与会话模型菜单同源；所选模型带推理等级时才出现级别下拉，默认最高；首项「跟随会话模型（默认）」= 不绑定），行首把手拖拽或「上移 / 下移」调整顺序；
 - 三个标签页共享一份暂存草稿，任一页「保存」一次写全；「重置」回退到补丁文件配置。
+
+### 按钮绑定模型
+
+每条快捷按钮可绑定 `{ provider, model, reasoningEffort? }`，点击时在追加 Prompt 的**同时**把该会话模型切到绑定值：
+
+- **未绑定 = 跟随会话**：点击完全不碰模型，行为与旧版本逐字一致；
+- **发送后不切回**：切换在会话内持久生效，后续手动发送继续用该模型；同一会话先后点两条绑定按钮，后点者生效；
+- **autoSend 先切后发**：切换完成后才提交，该回合一定用绑定模型；未绑定的按钮不增加任何等待；
+- **失败不阻断**：模型/等级已下线、连接不可用 → toast 提示，Prompt 照常追加；autoSend 时以会话当前模型提交，草稿不丢；子代理会话静默跳过切换（不报错）；
+- **连点保护**：切换与随后的提交进行中忽略后续点击（防「第二次切换 + 第一次提交」错配）；
+- **目录降级**：客户端 remote 不可用或目录加载失败 → 设置页只留「跟随会话模型」+ 提示；已存绑定即便不在目录中也原样回显并标「不可用」，保存不改写你的配置。
+
+官方口径副作用（与在会话里手动切模型完全一致，已确认接受）：切换会一并更新**新会话默认模型**；provider/model 发生变化时，系统会在下一次请求前插入一条 `[model changed: A → B]` 提示消息（**仅推理等级变化不插入**）。
 
 ### SKILL.md 示例（`~/my-skills/code-review/SKILL.md`）
 
@@ -110,7 +127,7 @@ frontmatter 可省：技能名取目录名，描述取正文第一个非空行�
 
 **自定义指令**：`/` 菜单选中即发送，适合「固定套路一键触发」；Prompt 里写 `/映射技能名` 令牌会连带注入对应 SKILL.md 全文。
 
-**快捷按钮**：点击追加进输入框（Ctrl/Cmd+Z 可整体撤销），自动发送则等同回车；展示顺序即设置里的按钮顺序，改完保存即时重排。
+**快捷按钮**：点击追加进输入框（Ctrl/Cmd+Z 可整体撤销），自动发送则等同回车；展示顺序即设置里的按钮顺序，改完保存即时重排。按钮可绑定模型与推理等级（见「按钮绑定模型」）——未绑定即跟随会话模型。
 
 ### 快捷按钮 vs 自定义指令
 
@@ -120,6 +137,7 @@ frontmatter 可省：技能名取目录名，描述取正文第一个非空行�
 | 名称 | 显示名，可中文 | 令牌名，小写 `a-z 0-9 _ -` |
 | 点击行为 | **追加进输入框**（可继续编辑） | **立即发送**（不经输入框） |
 | 自动发送 | 可选勾选 | 天然即发送 |
+| 模型绑定 | 可绑定模型 + 推理等级 | 不绑定（跟随会话） |
 | 适合 | 起草模板 / 引用技能后再补话 | 固定套路一键直发 |
 
 ## 架构
@@ -129,7 +147,7 @@ frontmatter 可省：技能名取目录名，描述取正文第一个非空行�
 | 文件 | 职责 |
 |---|---|
 | 宿主 `lib/index.js` | 配置归一化、设置命名空间 `v-skill-links` 注册（补丁层为 base、settings.yaml 用户层覆盖、热切换）、目录扫描 + TTL 缓存、`/api/v-skill-links` 路由（list / run / skill）、`agent/pre-step` 注入 `<skill_content>` |
-| 客户端 `lib/client.js` | `/` 触发源 ×2（映射技能置顶、自定义指令 followup 直发）、快捷按钮网格（会话态 composer.dock + 新增会话首屏 hero 条目互斥渲染）、设置页「技能管理」节 + 三标签页（暂存-保存、覆盖标记、段级重置） |
+| 客户端 `lib/client.js` | `/` 触发源 ×2（映射技能置顶、自定义指令 followup 直发）、快捷按钮网格（会话态 composer.dock + 新增会话首屏 hero 条目互斥渲染；按钮模型绑定 = 可选注入的官方 client remote 目录/切换，失败降级）、设置页「技能管理」节 + 三标签页（暂存-保存、覆盖标记、段级重置） |
 | 声明 `package.json` | `dsh.bundle.patch` 挂 loader 条目；`dsh.client` 声明把客户端编入 /plugins 启动图 |
 
 ## 与原生技能的关系
@@ -163,12 +181,12 @@ pnpm test                                    # 依次跑全部 9 个 smoke 测�
 node test/scan-smoke.mjs                     # 配置归一化 / frontmatter / 扫描去重
 node test/inject-smoke.mjs                   # 令牌匹配 / 消息过滤 / 渲染形状
 node test/settings-schema-smoke.mjs          # 设置 schema 契约 / 分层合并
-node test/buttons-schema-smoke.mjs           # 快捷按钮 schema（归一化 / 去重 / autoSend）
-node test/settings-card-smoke.mjs            # 设置节/标签页契约（暂存-保存 / 重置 / dock 注册）
+node test/buttons-schema-smoke.mjs           # 快捷按钮 schema（归一化 / 去重 / autoSend / 模型绑定透传）
+node test/settings-card-smoke.mjs            # 设置节/标签页契约（暂存-保存 / 重置 / dock 注册 / 模型草稿）
 node test/buttons-reorder-smoke.mjs          # 按钮排序（moveButton / 拖拽与上下移）
 node test/host-apply-smoke.mjs               # apply 接线 + API 端到端 + pre-step 注入
-node test/client-shape-smoke.mjs             # 客户端 bundle 形状（factory / 触发源 / 契约）
-node test/quick-buttons-client-smoke.mjs     # 快捷按钮客户端（点击语义 / 投影 / 禁用）
+node test/client-shape-smoke.mjs             # 客户端 bundle 形状（factory / 触发源 / 契约 / 模型绑定接线）
+node test/quick-buttons-client-smoke.mjs     # 快捷按钮客户端（点击语义 / 投影 / 禁用 / 模型切换与目录桥）
 ```
 
 ## License

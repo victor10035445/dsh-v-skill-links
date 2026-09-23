@@ -16,7 +16,7 @@ Three capabilities on a shared base:
 |---|---|---|
 | **Mapped Skills** | `/` menu "Mapped Skills" group | Picking inserts `/name `; the matching `SKILL.md` is injected in full on send |
 | **Custom Commands** | `/` menu "Custom Commands" group | Picking **immediately sends the Prompt** into the current session as a user message |
-| **Quick Buttons** | Button grid below the composer | Click **appends** the Prompt to the draft (keep editing); optional **auto-send** (equals Enter) |
+| **Quick Buttons** | Button grid below the composer | Click **appends** the Prompt to the draft (keep editing); optional **auto-send** (equals Enter); a model + reasoning effort may be bound |
 
 Shared traits:
 
@@ -76,6 +76,10 @@ Edit `$DSH_HOME\profiles\web\cordis.patch.yml` (your patch layer, append an entr
         autoSend: true              # send immediately after inserting
       - name: Review
         prompt: Please use /code-review to review current changes
+        model:                      # optional: bound model (absent = follow the session model)
+          provider: deepseek-official
+          model: deepseek-v4-pro
+          reasoningEffort: max      # optional effort; omit for the provider/model default
 ```
 
 The patch layer hot-reloads on save; if it doesn't, restart `dsh web`. Nonexistent directories are not fatal — empty menu groups auto-hide, and the `directories` array of `/api/v-skill-links/list` shows the specific errors.
@@ -84,8 +88,21 @@ For daily use, prefer the **visual settings page** (sidebar gear → **Settings 
 
 - **Skill Mapping**: one directory per line, effective on save;
 - **Custom Commands**: maintain name (lowercase `a-z 0-9 _ -`) + Prompt;
-- **Quick Buttons**: maintain name (Chinese allowed) + Prompt + auto-send checkbox; drag the row handle or use "Move up / Move down" to reorder;
+- **Quick Buttons**: maintain name (Chinese allowed) + Prompt + auto-send checkbox + **model / effort dropdowns** (candidates come from the same source as the session model menu; the effort dropdown appears only when the picked model carries reasoning levels and defaults to the highest; the first item "follow session model (default)" means unbound); drag the row handle or use "Move up / Move down" to reorder;
 - The three tabs share one staged draft; "Save" on any tab writes everything; "Reset" falls back to the patch-file config.
+
+### Model-bound buttons
+
+Every quick button may bind `{ provider, model, reasoningEffort? }`; clicking appends the Prompt **and** switches that session to the bound model:
+
+- **Unbound = follow the session**: the click never touches the model — behavior is byte-for-byte the old version;
+- **No switching back after send**: the switch persists inside the session, later manual sends keep using that model; clicking another bound button later wins;
+- **autoSend switches before sending**: the submit waits for the switch, so that turn definitely uses the bound model; unbound buttons gain no extra wait;
+- **Failures never block**: retired model/effort or an unavailable connection → a toast, the Prompt is still appended; with autoSend the message goes out with the session's current model and the draft is never lost; subagent sessions skip the switch silently (no error);
+- **Click guard**: clicks during an in-flight switch (and its submit) are ignored — no "second switch + first submit" mismatch;
+- **Catalog degradation**: if the client remote is unavailable or the catalog fails to load, the settings row offers only "follow session model" plus a hint; bindings that vanished from the catalog are echoed as-is with an "unavailable" marker and are never silently rewritten.
+
+Accepted upstream semantics (identical to switching models by hand in a session): the switch also updates the **new-session default model**, and when provider/model changes the system inserts a `[model changed: A → B]` notice before the next request (**effort-only changes insert nothing**).
 
 ### SKILL.md example (`~/my-skills/code-review/SKILL.md`)
 
@@ -110,7 +127,7 @@ Frontmatter is optional: the skill name falls back to the directory name, the de
 
 **Custom Commands**: pick and it sends — great for one-click fixed routines; `/mapped-skill-name` tokens in the Prompt trigger the corresponding SKILL.md injection.
 
-**Quick Buttons**: click to append (Ctrl/Cmd+Z undoes as a whole), auto-send equals Enter; display order follows the settings order, re-ordering applies on save.
+**Quick Buttons**: click to append (Ctrl/Cmd+Z undoes as a whole), auto-send equals Enter; display order follows the settings order, re-ordering applies on save. Buttons may bind a model and reasoning effort (see "Model-bound buttons") — unbound means following the session model.
 
 ### Quick Buttons vs Custom Commands
 
@@ -120,6 +137,7 @@ Frontmatter is optional: the skill name falls back to the directory name, the de
 | Name | Display label, Chinese allowed | Token name, lowercase `a-z 0-9 _ -` |
 | Click behavior | **Append to draft** (keep editing) | **Send immediately** (bypasses the draft) |
 | Auto-send | Optional checkbox | Inherently sends |
+| Model binding | Model + effort bindable | Unbound (follows the session) |
 | Best for | Drafting templates / referencing a skill then adding words | One-click fixed routines |
 
 ## Architecture
@@ -129,7 +147,7 @@ Zero npm dependencies, zero build steps — two entries + one manifest:
 | File | Responsibility |
 |---|---|
 | Host `lib/index.js` | Config normalization, settings namespace `v-skill-links` registration (patch config as base, settings.yaml user layer overrides, hot switching), directory scanning + TTL cache, `/api/v-skill-links` routes (list / run / skill), `agent/pre-step` `<skill_content>` injection |
-| Client `lib/client.js` | Two `/` trigger sources (Mapped Skills pinned, Custom Commands followup direct-send), quick buttons grid (session-mode composer.dock + new-session hero entry, mutually exclusive), settings "Skill Manager" section + three tabs (staged save, override markers, per-section reset) |
+| Client `lib/client.js` | Two `/` trigger sources (Mapped Skills pinned, Custom Commands followup direct-send), quick buttons grid (session-mode composer.dock + new-session hero entry, mutually exclusive; button model binding = optional injection of the official client remote catalog/switch, degraded on failure), settings "Skill Manager" section + three tabs (staged save, override markers, per-section reset) |
 | Manifest `package.json` | `dsh.bundle.patch` mounts the loader entry; `dsh.client` compiles the client into the /plugins startup graph |
 
 ## Relationship with native skills
@@ -163,12 +181,12 @@ Or run them one by one:
 node test/scan-smoke.mjs                     # config normalization / frontmatter / scan dedup
 node test/inject-smoke.mjs                   # token matching / message filtering / render shape
 node test/settings-schema-smoke.mjs          # settings schema contract / layered merge
-node test/buttons-schema-smoke.mjs           # quick button schema (normalization / dedup / autoSend)
-node test/settings-card-smoke.mjs            # settings section/tab contract (staged save / reset / dock registration)
+node test/buttons-schema-smoke.mjs           # quick button schema (normalization / dedup / autoSend / model passthrough)
+node test/settings-card-smoke.mjs            # settings section/tab contract (staged save / reset / dock registration / model draft)
 node test/buttons-reorder-smoke.mjs          # button reorder (moveButton / drag & up-down)
 node test/host-apply-smoke.mjs               # apply wiring + API end-to-end + pre-step injection
-node test/client-shape-smoke.mjs             # client bundle shape (factory / trigger sources / contracts)
-node test/quick-buttons-client-smoke.mjs     # quick buttons client (click semantics / projection / disable)
+node test/client-shape-smoke.mjs             # client bundle shape (factory / trigger sources / contracts / model wiring)
+node test/quick-buttons-client-smoke.mjs     # quick buttons client (click semantics / projection / disable / model switch & catalog bridge)
 ```
 
 ## License

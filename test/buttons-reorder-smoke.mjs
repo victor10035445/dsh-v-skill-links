@@ -140,6 +140,8 @@ const scope2 = {
 let registeredQuick = null;
 const ctx2 = {
 	effect: (fn) => { fn(); return () => {}; },
+	/* 可选注入桩（add-quick-button-model）：本用例只需面板草稿面；目录桥降级即可。 */
+	inject: (deps, fn) => fn({ remote: {}, sessions: {}, on: () => () => {} }),
 	locale: {
 		register: () => () => {},
 		bind: () => (key) => key,

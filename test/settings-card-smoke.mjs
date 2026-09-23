@@ -102,8 +102,41 @@ let registeredDock = null;
 const registeredSources = [];
 const disposers = [];
 const localeTable = { nav: "技能管理", title: "技能管理", tabMapping: "技能映射", tabCommands: "自定义指令", tabQuick: "快捷功能" };
+/* 可选注入桩（add-quick-button-model）：remote / sessions 齐备 → 目录桥创建，面板拿得到候选项。 */
+const injectCalls = [];
+const modelCatalogCalls = [];
+const modelGroups = [
+	{
+		id: "p1", name: "Provider One",
+		models: [
+			{ id: "m-a", name: "Model A", reasoning: { efforts: [{ id: "low", name: "Low" }, { id: "max", name: "Max" }] } },
+			{ id: "m-b", name: "Model B" },
+		],
+	},
+];
+const injectScope = {
+	remote: {
+		session: {
+			modelCatalog: async () => { modelCatalogCalls.push(1); return { ok: true, value: { groups: modelGroups } }; },
+			selectModel: async () => ({ ok: true, value: { selected: {} } }),
+		},
+		$on: () => () => {},
+	},
+	sessions: { subagentAddress: () => undefined },
+	on: () => () => {},
+};
 const ctx = {
 	effect(fn, label) { disposers.push({ label, dispose: fn() }); },
+	inject(deps, fn) {
+		injectCalls.push(deps);
+		/* 模拟宿主 cordis 服务门（0.1.5-rc.2 回归保护）：remote.session 是独立服务键，
+		   作用域未声明时 `scope.remote.session` 读取直接抛错（目录桥随之永不就绪）。 */
+		const remote = deps.includes("remote.session") ? injectScope.remote
+			: Object.defineProperty(Object.create(injectScope.remote), "session", {
+				get() { throw new Error('cannot get property "remote.session" without inject'); },
+			});
+		return fn({ ...injectScope, remote });
+	},
 	locale: {
 		register: () => () => {},
 		bind: (ns) => (key) => localeTable[key] ?? key,
@@ -183,6 +216,38 @@ face.removeButton(1);
 assert.equal(face.getSnapshot().buttonsDraft.length, 1, "删除恢复草稿");
 face.discard();
 assert.equal(face.getSnapshot().buttonsDirty, false, "放弃修改清按钮暂存");
+
+/* ── 1.6 按钮模型绑定（add-quick-button-model）：editButton("model") 草稿 / 保存 / 取消绑定 / 回退 ── */
+assert.deepEqual(injectCalls, [["remote", "remote.session", "sessions"]], "模型目录为可选注入（remote.session 声明在列表：cordis 独立服务键，不声明读取即抛错）");
+assert.equal(modelCatalogCalls.length, 1, "目录桥构造即预取一次（官方模型目录同款）");
+const quickTab = registeredTabs.find((t) => t.options.id === "quick");
+const quickProps = quickTab.options.inject();
+assert.ok(quickProps.models && typeof quickProps.models.getSnapshot === "function", "快捷功能标签页拿到模型目录快照面");
+assert.equal(quickProps.models.getSnapshot().catalog.status, "ready", "目录加载成功（status ready）");
+assert.deepEqual(quickProps.models.getSnapshot().catalog.groups.map((g) => g.id), ["p1"], "目录 groups 透传（与会话模型菜单同源）");
+face.addButton();
+face.editButton(1, "name", "Plain");
+face.editButton(1, "prompt", "无绑定的按钮");
+face.editButton(0, "model", { provider: "p1", model: "m-a", reasoningEffort: "max" });
+assert.deepEqual(face.getSnapshot().buttonsDraft[0].model,
+	{ provider: "p1", model: "m-a", reasoningEffort: "max" }, "模型绑定进草稿（键序固定 provider→model→reasoningEffort）");
+assert.equal(face.getSnapshot().buttonsDirty, true, "模型绑定计入按钮脏标记");
+await face.save();
+const modelWrite = calls.set.filter(([field]) => field === "buttons").at(-1);
+assert.deepEqual(modelWrite[1][0].model, { provider: "p1", model: "m-a", reasoningEffort: "max" }, "保存写出 model 三元组");
+assert.ok(!("model" in modelWrite[1][1]), "未绑定条目 MUST NOT 输出 model 键");
+assert.equal(face.getSnapshot().buttonsDirty, false, "保存后按钮暂存清空");
+/* 生效值携带绑定 → 草稿跟随；取消绑定删键；放弃修改回退原绑定 */
+snap = { ...snap, value: { ...snap.value, buttons: [{ name: "新建", prompt: "使用 /alpha 做一件事", autoSend: true, model: { provider: "p1", model: "m-a", reasoningEffort: "max" } }] } };
+for (const l of [...scopeListeners]) l();
+assert.deepEqual(face.getSnapshot().buttonsDraft[0].model,
+	{ provider: "p1", model: "m-a", reasoningEffort: "max" }, "生效绑定随 settingsScope 跟进草稿");
+face.editButton(0, "model", undefined);
+assert.equal(face.getSnapshot().buttonsDirty, true, "取消绑定翻起 dirty");
+assert.ok(!("model" in face.getSnapshot().buttonsDraft[0]), "取消绑定时 MUST 删除 model 键（不留 model: undefined）");
+face.discard();
+assert.deepEqual(face.getSnapshot().buttonsDraft[0].model,
+	{ provider: "p1", model: "m-a", reasoningEffort: "max" }, "放弃修改回退到生效绑定");
 
 /* ── 2. 作用域变更跟随（目录 + 指令） ── */
 snap = { ...snap, value: { directories: ["F:/x", "F:/y"], commands: [{ name: "greet", prompt: "p1" }, { name: "ship", prompt: "p2" }] } };

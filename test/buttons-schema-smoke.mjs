@@ -58,6 +58,38 @@ assert.throws(() => schema({ buttons: [{ name: "", prompt: "p" }] }), /name must
 assert.equal(schema.dict.buttons.type, "array", "walker 容器形状");
 assert.equal(schema.toJSON().dict.buttons.inner.type, "object", "toJSON 信封含 buttons");
 
+/* ── 6.5 可选 model 绑定（add-quick-button-model）：透传 / 校验 / 零迁移 ── */
+assert.deepEqual(
+	normalizeButtons([{ name: "a", prompt: "p", model: { provider: " p ", model: " m ", reasoningEffort: " max " } }]),
+	[{ name: "a", prompt: "p", autoSend: false, model: { provider: "p", model: "m", reasoningEffort: "max" } }],
+	"模型三元组原样透传（trim + 键序 provider→model→reasoningEffort）",
+);
+const noEffort = normalizeButtons([{ name: "a", prompt: "p", model: { provider: "p", model: "m" } }])[0];
+assert.deepEqual(noEffort.model, { provider: "p", model: "m" }, "无等级只保留 provider/model");
+assert.deepEqual(Object.keys(noEffort.model), ["provider", "model"], "缺省 reasoningEffort 时 MUST NOT 输出该键");
+const unbound = normalizeButtons([{ name: "a", prompt: "p" }])[0];
+assert.deepEqual(Object.keys(unbound), ["name", "prompt", "autoSend"], "未提供 model 时归一化结果 MUST NOT 输出该字段");
+assert.ok(!("model" in unbound), "旧条目零迁移：不补 model 键");
+const oldData = normalizeButtons([{ name: "旧", prompt: "p", autoSend: true }]);
+assert.deepEqual(oldData, [{ name: "旧", prompt: "p", autoSend: true }], "旧数据（无 model）逐字不变");
+assert.deepEqual(
+	normalizeButtons({ buttons: [{ name: "a", prompt: "p", model: { provider: "p", model: "m", reasoningEffort: "max" } }] }).map((b) => b.model),
+	[{ provider: "p", model: "m", reasoningEffort: "max" }],
+	"节形式入参同样透传",
+);
+/* 非法形状（宿主归一化即拒绝，用户设置层不会被写入） */
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: { provider: "", model: "m" } }]), /model\.provider must be a non-empty string/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: { provider: "p" } }]), /model\.model must be a non-empty string/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: { provider: "p", model: 1 } }]), /model\.model must be a non-empty string/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: { provider: "p", model: "m", reasoningEffort: 1 } }]), /reasoningEffort must be a string/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: { provider: "p", model: "m", reasoningEffort: "  " } }]), /reasoningEffort must not be empty/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: "p/m" }]), /model must be an object/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", model: ["p", "m"] }]), /model must be an object/);
+assert.throws(() => schema({ buttons: [{ name: "a", prompt: "p", model: { provider: "p", model: "" } }] }), /model\.model must be a non-empty string/, "schema 写入路径同样拒绝");
+assert.deepEqual(schema({ buttons: [{ name: "a", prompt: "p", model: { provider: "p1", model: "m1", reasoningEffort: "max" } }] }).buttons,
+	[{ name: "a", prompt: "p", autoSend: false, model: { provider: "p1", model: "m1", reasoningEffort: "max" } }],
+	"schema 归一化保留 model（宿主 MUST 显式透传，否则存储留不住）");
+
 /* ── 7. 分层合并：base(组合层) 与用户层 buttons 覆盖语义（dsh-settings resolve 管线） ── */
 function mergeLayers(base, section) {
   if (section === undefined) return base;

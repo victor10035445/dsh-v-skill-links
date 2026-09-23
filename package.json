@@ -1,7 +1,7 @@
 {
   "name": "dsh-v-skill-links",
-  "description": "V 技能映射 — DeepSeek Harness Web 的 '/' 菜单插件：映射技能（配置目录的一级子目录含 SKILL.md，选中注入全文）+ 自定义指令（followup 型）+ 快捷按钮（输入框下方网格，点击追加 Prompt 进输入框，可选自动发送）+ 设置页可视化编辑（目录/指令/按钮 CRUD）。",
-  "version": "0.4.1",
+  "description": "V 技能映射 — DeepSeek Harness Web 的 '/' 菜单插件：映射技能（配置目录的一级子目录含 SKILL.md，选中注入全文）+ 自定义指令（followup 型）+ 快捷按钮（输入框下方网格，点击追加 Prompt 进输入框，可选自动发送与模型/等级绑定）+ 设置页可视化编辑（目录/指令/按钮 CRUD）。",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

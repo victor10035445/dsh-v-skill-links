@@ -7,7 +7,11 @@
  *     hero 标记）；
  *  5. QuickButtonsGrid 组件契约（空列表 null / 缺 face null / outline+sm 元素形状 /
  *     data-v-button / 截断容器 / 点击追加与 autoSend→submit / phase 非 plain 禁用 /
- *     hero 门控：非 blank 返回 null、blank 渲染且带修饰类、与 composer 条目互斥）。
+ *     hero 门控：非 blank 返回 null、blank 渲染且带修饰类、与 composer 条目互斥）；
+ *  6. 模型绑定（add-quick-button-model）：纯函数（等级最高 / 模型键 / 目录展开 / 绑定归一）、
+ *     点击语义（先切后发 / 信封失败降级 / 未绑定零调用 / 子代理跳过 / in-flight 忽略连点）、
+ *     面板模型与级别下拉（候选项 / 回显 / 漂移 / 降级 / 禁用）、目录桥（预取 / 事件重载 /
+ *     连接重置 / 信封判定）。
  * 运行：node test/quick-buttons-client-smoke.mjs
  */
 import assert from "node:assert/strict";
@@ -56,6 +60,14 @@ new Function("window", "require", code)(windowStub, requireStub);
 assert.ok(definition, "捕获到 load 定义");
 const plugin = definition.factory(requireStub);
 
+/* 模型目录夹具（add-quick-button-model：会话模型菜单同源的宿主导出形状）。 */
+const modelGroups = [
+	{ id: "p1", name: "Provider One", models: [
+		{ id: "m-a", name: "Model A", reasoning: { efforts: [{ id: "low", name: "Low" }, { id: "max", name: "Max" }] } },
+		{ id: "m-b", name: "Model B" },
+	] },
+];
+
 /* ── 1. appendPrompt 纯函数（spec「点击填入」口径） ── */
 assert.equal(plugin.appendPrompt("", "使用 xxx 技能"), "使用 xxx 技能", "空草稿直接填入");
 assert.equal(plugin.appendPrompt("帮我看看", "使用 xxx 技能"), "帮我看看\n使用 xxx 技能", "非空草稿换行追加");
@@ -102,6 +114,35 @@ scopeSnap = { status: "ready", value: { buttons: [{ name: "x", prompt: "p" }] } 
 for (const l of [...scopeListeners]) l();
 assert.deepEqual(store.getSnapshot().buttons, [], "dispose 后不再跟随");
 
+/* ── 3.5 模型绑定纯函数（add-quick-button-model，design D5/D10）：等级最高 / 模型键 / 目录展开 / 绑定归一 ── */
+const { highestEffort, modelKeyOf, catalogOptions, buttonModelOf } = plugin;
+assert.equal(highestEffort([{ id: "low" }, { id: "max" }, { id: "high" }]), "max", "已知等级序取最大（与列表书写顺序无关）");
+assert.equal(highestEffort(["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((id) => ({ id }))), "max", "全序取 max");
+assert.equal(highestEffort([{ id: "custom-a" }, { id: "custom-b" }]), "custom-b", "未知等级 id：退回列表末项");
+assert.equal(highestEffort([{ id: "low" }, { id: "max" }, { id: "weird" }]), "weird", "已知序中出现未知 id 同样退回末项（适配器实测升序）");
+assert.equal(highestEffort([]), undefined, "空列表 → undefined（不写 reasoningEffort）");
+assert.equal(highestEffort(undefined), undefined, "缺等级元数据 → undefined");
+assert.equal(modelKeyOf({ provider: "p", model: "m" }), "p/m", "模型键（无等级形态）");
+assert.equal(modelKeyOf({ provider: "p", model: "m", reasoningEffort: "max" }), "p/m/max", "模型键（含等级形态）");
+assert.equal(modelKeyOf(undefined), "", "形状不足 → 空键");
+assert.equal(modelKeyOf({ provider: "", model: "m" }), "", "缺 provider → 空键");
+const options = catalogOptions(modelGroups);
+assert.deepEqual(options.items, [
+	{ key: "p1/m-a", label: "Provider One · Model A" },
+	{ key: "p1/m-b", label: "Provider One · Model B" },
+], "候选项按目录序（provider 分组序）+ provider.name · model.name");
+assert.deepEqual(options.byKey.get("p1/m-a").efforts.map((e) => e.id), ["low", "max"], "模型 → 等级列表查表");
+assert.deepEqual(options.byKey.get("p1/m-b").efforts, [], "无等级元数据的模型 → 空等级列表");
+assert.deepEqual(catalogOptions([
+	{ id: "p1", name: "P1", models: [{ id: "m", name: "M" }] },
+	{ id: "p1", name: "同 provider 第二组", models: [{ id: "m", name: "重键被丢弃" }] },
+]).items.map((i) => i.key), ["p1/m"], "重键先到先得（与宿主目录口径一致）");
+assert.deepEqual(catalogOptions(undefined).items, [], "无目录 → 空候选项");
+assert.deepEqual(buttonModelOf({ provider: "p", model: "m", reasoningEffort: "" }), { provider: "p", model: "m" }, "空等级串按未提供处理");
+assert.equal(buttonModelOf({ provider: "p" }), undefined, "形状不足 → 未绑定");
+assert.ok(!("reasoningEffort" in buttonModelOf({ provider: "p", model: "m" })), "无等级 MUST NOT 输出该键");
+assert.deepEqual(Object.keys(buttonModelOf({ provider: "p", model: "m", reasoningEffort: "max" })), ["provider", "model", "reasoningEffort"], "键序固定");
+
 /* ── 4. dock 注册契约 + apply 接线 ── */
 let scopeSnapShared = { status: "ready", value: { buttons: [{ name: "新建", prompt: "使用 xxx 技能做 xxx 事", autoSend: true }] } };
 const sharedListeners = new Set();
@@ -111,8 +152,36 @@ const sharedScope = {
 };
 let registeredDock = null;
 let registeredHero = null;
+/* 可选注入桩（add-quick-button-model）：remote / sessions 齐备 → 目录桥创建并预取。 */
+const injectedDeps = [];
+const selectModelCalls = [];
+const switchModelResponses = [];
+const injectScope = {
+	remote: {
+		session: {
+			modelCatalog: async () => ({ ok: true, value: { groups: modelGroups } }),
+			selectModel: async (request) => {
+				selectModelCalls.push(request);
+				return switchModelResponses.length > 0 ? switchModelResponses.shift() : { ok: true, value: { selected: {} } };
+			},
+		},
+		$on: () => () => {},
+	},
+	sessions: { subagentAddress: (id) => (String(id).startsWith("subagent") ? { parentSessionId: "p", childSessionId: id, mode: "task" } : undefined) },
+	on: () => () => {},
+};
 const ctx = {
 	effect: (fn) => { fn(); return () => {}; },
+	inject: (deps, fn) => {
+		injectedDeps.push(deps);
+		/* 模拟宿主 cordis 服务门（0.1.5-rc.2 回归保护）：remote.session 是独立服务键，
+		   作用域未声明时 `scope.remote.session` 读取直接抛错（目录桥随之永不就绪）。 */
+		const remote = deps.includes("remote.session") ? injectScope.remote
+			: Object.defineProperty(Object.create(injectScope.remote), "session", {
+				get() { throw new Error('cannot get property "remote.session" without inject'); },
+			});
+		return fn({ ...injectScope, remote });
+	},
 	locale: {
 		register: () => () => {},
 		bind: () => (key) => key,
@@ -140,6 +209,16 @@ assert.equal(registeredDock.options.order, -1, "紧贴输入卡片（stats=0 在
 assert.equal(registeredDock.options.locale, "v-skill-links.settings");
 const dockProps = registeredDock.options.inject();
 assert.ok(dockProps.buttons && typeof dockProps.buttons.getSnapshot === "function", "inject 提供按钮快照 face");
+/* 6.1 口径（add-quick-button-model）：inject 收 sessionId；无参（无会话）时 MUST NOT 抛错且 canSwitch:false */
+assert.equal(dockProps.sessionId, undefined, "inject() 无参（sessionId undefined）不抛错");
+assert.equal(dockProps.canSwitch, false, "无会话 → canSwitch: false（点击路径按不可切换处理）");
+assert.equal(typeof dockProps.switchModel, "function", "inject face 提供切换函数（收敛单处）");
+assert.equal(typeof dockProps.notify, "function", "inject face 提供 toast 通道");
+const dockPropsBound = registeredDock.options.inject("s-1");
+assert.equal(dockPropsBound.sessionId, "s-1", "inject 透传 sessionId");
+assert.equal(dockPropsBound.canSwitch, true, "普通会话可切换");
+assert.equal(registeredDock.options.inject("subagent-1").canSwitch, false, "子代理会话 → canSwitch: false（跳过切换）");
+assert.deepEqual(injectedDeps, [["remote", "remote.session", "sessions"]], "静态 inject 列表不动，模型目录服务集中在单处可选注入（remote.session 是 cordis 独立服务键，MUST 声明）");
 
 /* ── 4b. hero 条目注册契约（design D10：新增会话首屏经 conversation.input.dock 渲染同一网格） ── */
 assert.ok(registeredHero, "conversation.input.dock 槽位已注册（hero 条目）");
@@ -330,6 +409,122 @@ const composerDuringSession = Grid({
 });
 assert.equal(composerDuringSession.props.className, "v-qb-grid", "composer 条目无 hero 修饰类、会话态接管渲染");
 
+/* ── 5h. 模型绑定点击语义（add-quick-button-model，spec「按钮模型绑定与切换语义」） ── */
+const boundStore = plugin.createButtonsStore({
+	getSnapshot: () => ({ status: "ready", value: { buttons: [
+		{ name: "绑定", prompt: "用强模型", autoSend: true, model: { provider: "p1", model: "m-a", reasoningEffort: "max" } },
+		{ name: "跟随", prompt: "随便写", autoSend: true },
+	] } }),
+	subscribe: () => () => {},
+});
+/** 可控切换桩：记录调用、由测试决定何时以何信封结算。 */
+const makeSwitch = () => {
+	const calls = [];
+	let settle = () => {};
+	const promise = new Promise((resolve) => { settle = resolve; });
+	return { calls, settle, switchModel: (sessionId, model) => { calls.push({ sessionId, model }); return promise; } };
+};
+const gridWith = (over = {}) => Grid({
+	input: { draft: "", phase: "plain" },
+	inputActions: over.actions ?? makeActions(),
+	buttons: boundStore,
+	sessionId: "s-1",
+	canSwitch: true,
+	switchModel: over.switchModel ?? null,
+	notify: over.notify,
+	t: (k) => k,
+	...over.props,
+});
+
+/* 5h-1. autoSend + 绑定 + 可切换：先切后发（切换完成前 MUST NOT 提交） */
+const sw1 = makeSwitch();
+const act1 = makeActions();
+const notes1 = [];
+const g1 = gridWith({ actions: act1, switchModel: sw1.switchModel, notify: (text, isError) => notes1.push([text, isError]) });
+const [boundBtn1, followBtn1] = childrenOf(g1);
+boundBtn1.props.onClick();
+assert.deepEqual(act1.calls.setDraft, ["用强模型"], "点击先追加填入（同步，现状不变）");
+assert.equal(sw1.calls.length, 1, "有绑定且可切换 → 发起一次切换");
+assert.deepEqual(sw1.calls[0], { sessionId: "s-1", model: { provider: "p1", model: "m-a", reasoningEffort: "max" } }, "切换请求 = 会话 + 绑定三元组");
+assert.equal(act1.calls.submit, 0, "先切后发：切换完成前 MUST NOT 提交");
+sw1.settle({ ok: true, error: "" });
+await new Promise((r) => setImmediate(r));
+assert.equal(act1.calls.submit, 1, "切换完成后才提交（该回合用绑定模型）");
+assert.deepEqual(notes1, [], "切换成功不提示");
+
+/* 5h-2. 信封 ok=false → toast 且不阻断（仍以会话当前模型提交） */
+const sw2 = makeSwitch();
+const act2 = makeActions();
+const notes2 = [];
+const g2 = gridWith({ actions: act2, switchModel: sw2.switchModel, notify: (text, isError) => notes2.push([text, isError]) });
+childrenOf(g2)[0].props.onClick();
+sw2.settle({ ok: false, error: "model-not-found: unknown model" });
+await new Promise((r) => setImmediate(r));
+assert.deepEqual(notes2, [["switchFailed" + "model-not-found: unknown model", true]], "切换失败 toast 提示（错误通道）");
+assert.equal(act2.calls.submit, 1, "autoSend 降级为以会话当前模型提交（草稿不丢）");
+
+/* 5h-2b. 切换通道不可用（桥缺失）→ unavailable toast */
+const sw2b = makeSwitch();
+const act2b = makeActions();
+const notes2b = [];
+const g2b = gridWith({ actions: act2b, switchModel: sw2b.switchModel, notify: (text, isError) => notes2b.push([text, isError]) });
+childrenOf(g2b)[0].props.onClick();
+sw2b.settle({ ok: false, unavailable: true, error: "" });
+await new Promise((r) => setImmediate(r));
+assert.deepEqual(notes2b, [["switchUnavailable", true]], "不可用通道 → 降级文案");
+
+/* 5h-2c. 切换抛错 → 同样走 toast 降级（不阻断） */
+const act2c = makeActions();
+const notes2c = [];
+const g2c = gridWith({ actions: act2c, switchModel: () => Promise.reject(new Error("boom")), notify: (text, isError) => notes2c.push([text, isError]) });
+childrenOf(g2c)[0].props.onClick();
+await new Promise((r) => setImmediate(r));
+assert.deepEqual(notes2c, [["switchFailed" + "boom", true]], "抛错同样 toast");
+assert.equal(act2c.calls.submit, 1, "抛错不阻断提交");
+
+/* 5h-3. 未绑定按钮：零切换调用、零目录读取，行为与既有版本逐字一致 */
+const sw3 = makeSwitch();
+const act3 = makeActions();
+const g3 = gridWith({ actions: act3, switchModel: sw3.switchModel, notify: () => { throw new Error("未绑定 MUST NOT 提示"); } });
+childrenOf(g3)[1].props.onClick();
+assert.equal(sw3.calls.length, 0, "未绑定按钮完全不碰模型");
+assert.deepEqual(act3.calls.setDraft, ["随便写"], "未绑定走原路径（仅填入）");
+assert.equal(act3.calls.submit, 1, "未绑定 autoSend 同步提交");
+
+/* 5h-4. 子代理会话（canSwitch=false）：静默跳过切换、不报错、照常填入 */
+const sw4 = makeSwitch();
+const act4 = makeActions();
+const notes4 = [];
+const g4 = gridWith({ actions: act4, switchModel: sw4.switchModel, notify: (text, isError) => notes4.push([text, isError]), props: { canSwitch: false } });
+childrenOf(g4)[0].props.onClick();
+assert.equal(sw4.calls.length, 0, "子代理会话 MUST NOT 尝试切换");
+assert.deepEqual(act4.calls.setDraft, ["用强模型"], "prompt 照常追加");
+assert.equal(act4.calls.submit, 1, "autoSend 照常提交（会话当前模型）");
+assert.deepEqual(notes4, [], "跳过切换不报错");
+
+/* 5h-4b. 槽位未接线（无 switchModel）：按不可切换处理（不抛错） */
+const act4b = makeActions();
+const g4b = gridWith({ actions: act4b });
+childrenOf(g4b)[0].props.onClick();
+assert.deepEqual(act4b.calls.setDraft, ["用强模型"], "未接线时仍照常填入");
+assert.equal(act4b.calls.submit, 1, "未接线时 autoSend 照常提交");
+
+/* 5h-5. in-flight 保护：切换（及随后的提交）未完成期间忽略重复点击 */
+const sw5 = makeSwitch();
+const act5 = makeActions();
+const g5 = gridWith({ actions: act5, switchModel: sw5.switchModel, notify: () => {} });
+const btn5 = childrenOf(g5)[0];
+btn5.props.onClick();
+btn5.props.onClick();
+btn5.props.onClick();
+assert.deepEqual(act5.calls.setDraft, ["用强模型"], "in-flight 期间重复点击不产生第二次填入");
+assert.equal(sw5.calls.length, 1, "in-flight 期间不发起第二次切换（防「第二次切换 + 第一次提交」错配）");
+sw5.settle({ ok: true, error: "" });
+await new Promise((r) => setImmediate(r));
+assert.equal(act5.calls.submit, 1, "首个点击序列按既定口径完成（仅一次提交）");
+btn5.props.onClick();
+assert.equal(sw5.calls.length, 2, "序列结束后恢复可点击");
+
 /* ── 6. QuickPanel 排序控件形态（add-quick-buttons-reorder，design D2/D3）：把手 / ↑↓ 按钮 ── */
 const mkQuickState = (over = {}) => ({
 	status: "ready", available: true, writable: true, mode: "host",
@@ -378,5 +573,150 @@ assert.equal(qGrip(soloRows[0]).props.draggable, false, "单条按钮把手不�
 for (const m of qMoves(soloRows[0])) assert.equal(m.props.disabled, true, "单条按钮上下移均禁用");
 /* dock 网格渲染逻辑零改动：网格项无任何拖拽属性（dock 纯跟随，spec） */
 assert.ok(!("draggable" in buttons[0].props) && !("onDragOver" in buttons[0].props) && !("onDrop" in buttons[0].props), "dock 网格渲染零改动（无拖拽属性）");
+
+/* ── 7. 模型/级别下拉（add-quick-button-model，spec「按钮模型的设置交互」） ── */
+const catalogFace = (catalog) => ({ getSnapshot: () => ({ catalog }), subscribe: () => () => {} });
+const CATALOG_READY = { status: "ready", groups: modelGroups };
+const qModelRow = (row) => kidsOf(row).find((c) => c.props && c.props.className === "v-sc-modelRow");
+const qFields = (row) => kidsOf(qModelRow(row)).filter((c) => c.props && c.props.className === "v-sc-modelField");
+/** 行内下拉：模型下拉 + （可选）级别下拉。 */
+const qSelects = (row) => qFields(row).map((field) => kidsOf(field).find((c) => c.type === "select"));
+const qOptions = (select) => kidsOf(select);
+/** option 文案（react 桩把 children 放在 el.children）。 */
+const qText = (el) => [].concat(el.children ?? []).flat()[0];
+const panelWith = (draft, models, over = {}, edits = []) => ({
+	edits,
+	panel: plugin.QuickPanel({
+		t: (k) => k,
+		face: { getSnapshot: () => mkQuickState({ buttonsDraft: draft, ...over }), subscribe: () => () => {}, editButton: (i, f, v) => edits.push([i, f, v]) },
+		models,
+	}),
+});
+const boundDraft = [
+	{ name: "绑定", prompt: "pa", autoSend: true, model: { provider: "p1", model: "m-a", reasoningEffort: "max" } },
+	{ name: "跟随", prompt: "pb", autoSend: false },
+	{ name: "模型漂移", prompt: "pc", autoSend: false, model: { provider: "gone", model: "m-x", reasoningEffort: "max" } },
+];
+/* 7a. 目录就绪：候选来自目录；已存绑定回显；未绑定落在「跟随会话模型」 */
+const setupA = panelWith(boundDraft, catalogFace(CATALOG_READY));
+const rowsA = qRows(setupA.panel);
+const selectsA = rowsA.map(qSelects);
+assert.equal(selectsA[0].length, 2, "带等级模型的行走渲染「模型 + 级别」两个下拉");
+assert.equal(selectsA[1].length, 1, "未绑定行只渲染模型下拉（首项即跟随态）");
+assert.equal(selectsA[2].length, 1, "目录中不存在的模型 → 无等级元数据可依，不渲染级别下拉");
+assert.equal(selectsA[0][0].props.value, "p1/m-a", "模型下拉受控值 = provider/model 键");
+assert.deepEqual(qOptions(selectsA[0][0]).map((o) => [o.props.value, qText(o)]), [
+	["", "buttonModelFollow"], ["p1/m-a", "Provider One · Model A"], ["p1/m-b", "Provider One · Model B"],
+], "首项「跟随会话模型（默认）」+ 目录候选（provider.name · model.name）");
+assert.equal(selectsA[1][0].props.value, "", "未绑定 → 跟随态（空键）");
+assert.deepEqual(qOptions(selectsA[1][0]).map((o) => o.props.value), ["", "p1/m-a", "p1/m-b"], "未绑定行同样列出候选");
+assert.equal(selectsA[0][1].props.value, "max", "已存等级原样回显");
+assert.deepEqual(qOptions(selectsA[0][1]).map((o) => [o.props.value, qText(o)]), [
+	["low", "Low"], ["max", "Max"],
+], "级别下拉按目录顺序（id 值 / name 文案）");
+const driftOptions = qOptions(selectsA[2][0]);
+assert.equal(selectsA[2][0].props.value, "gone/m-x", "已存但不在目录中的绑定原样回显（MUST NOT 静默改写）");
+assert.deepEqual([driftOptions.at(-1).props.value, qText(driftOptions.at(-1))], ["gone/m-x", "gone/m-x · modelUnavailable"], "漂移值标「不可用」");
+/* 7b. 交互：换模型按新模型等级重算并默认最高；无等级不写 reasoningEffort；选定「跟随」删键 */
+selectsA[0][0].props.onChange({ target: { value: "p1/m-a" } });
+assert.deepEqual(setupA.edits.at(-1), [0, "model", { provider: "p1", model: "m-a", reasoningEffort: "max" }], "选带等级模型 → 默认最高（design D5）");
+selectsA[0][0].props.onChange({ target: { value: "p1/m-b" } });
+assert.deepEqual(setupA.edits.at(-1), [0, "model", { provider: "p1", model: "m-b" }], "无等级模型 MUST NOT 携带 reasoningEffort");
+selectsA[0][0].props.onChange({ target: { value: "" } });
+assert.deepEqual(setupA.edits.at(-1), [0, "model", undefined], "选「跟随会话模型」→ 未绑定（editButton 删 model 键）");
+const editCountBeforeDrift = setupA.edits.length;
+selectsA[2][0].props.onChange({ target: { value: "gone/m-x" } });
+assert.equal(setupA.edits.length, editCountBeforeDrift, "重选漂移项为空操作（保持原绑定）");
+selectsA[0][1].props.onChange({ target: { value: "low" } });
+assert.deepEqual(setupA.edits.at(-1), [0, "model", { provider: "p1", model: "m-a", reasoningEffort: "low" }], "改选更低等级写入该值");
+/* 7c. 等级漂移：模型仍在但等级列表已不含已存等级 → 原样回显 + 标不可用 */
+const effortDrift = panelWith(
+	[{ name: "等级漂移", prompt: "p", autoSend: false, model: { provider: "p1", model: "m-a", reasoningEffort: "legacy" } }],
+	catalogFace(CATALOG_READY),
+);
+const driftSelects = qSelects(qRows(effortDrift.panel)[0]);
+assert.equal(driftSelects[1].props.value, "legacy", "已存等级原样选中");
+assert.deepEqual([qOptions(driftSelects[1]).at(-1).props.value, qText(qOptions(driftSelects[1]).at(-1))], ["legacy", "legacy · modelUnavailable"], "等级漂移值作为额外一项标「不可用」");
+driftSelects[1].props.onChange({ target: { value: "legacy" } });
+assert.equal(effortDrift.edits.length, 0, "重选漂移等级为空操作（保存不改写）");
+/* 7d. 目录不可用降级：仅「跟随会话模型」+ 降级提示；其余字段编辑照常 */
+const degradedPanel = panelWith([{ name: "跟随", prompt: "p", autoSend: false }], null);
+const degradedRows = qRows(degradedPanel.panel);
+assert.deepEqual(qOptions(qSelects(degradedRows[0])[0]).map((o) => o.props.value), [""], "目录不可用 → 模型下拉只剩「跟随会话模型」");
+assert.ok(kidsOf(degradedPanel.panel).some((c) => c.props && c.props.className === "v-sc-modelHint" && qText(c) === "modelCatalogFallback"), "显示降级提示");
+const errCatalogPanel = panelWith([{ name: "跟随", prompt: "p", autoSend: false }], catalogFace({ status: "error", groups: [] }));
+assert.ok(kidsOf(errCatalogPanel.panel).some((c) => c.props && c.props.className === "v-sc-modelHint"), "目录加载失败同样降级");
+/* 7e. 不可写 / 保存中：下拉与行内既有控件同禁用 */
+for (const over of [{ writable: false }, { saving: true }]) {
+	const disabledRows = qRows(panelWith(boundDraft, catalogFace(CATALOG_READY), over).panel);
+	for (const select of disabledRows.flatMap(qSelects)) assert.equal(select.props.disabled, true, "下拉与行内控件同禁用口径");
+}
+
+/* ── 8. 模型目录桥（add-quick-button-model，design D2/D3/D6）：预取 / 事件重载 / 重置 / 信封判定 ── */
+const bridgeEvents = [];
+const bridgeSelectCalls = [];
+let bridgeCatalogResponse = { ok: true, value: { groups: modelGroups } };
+let bridgeSelectResponse = { ok: true, value: { selected: {} } };
+let bridgeSelectThrows = false;
+const bridge = plugin.createModelBridge({
+	remote: {
+		session: {
+			modelCatalog: async () => bridgeCatalogResponse,
+			selectModel: async (request) => {
+				bridgeSelectCalls.push(request);
+				if (bridgeSelectThrows) throw new Error("offline");
+				return bridgeSelectResponse;
+			},
+		},
+		$on: (event, listener) => { bridgeEvents.push({ event, listener }); return () => {}; },
+	},
+	sessions: { subagentAddress: (id) => (id === "child-1" ? { parentSessionId: "p", childSessionId: id, mode: "task" } : undefined) },
+	on: (event, listener) => { bridgeEvents.push({ event, listener }); return () => {}; },
+});
+assert.equal(bridge.getSnapshot().status, "loading", "构造即预取（官方模型目录同款）");
+await new Promise((r) => setImmediate(r));
+assert.equal(bridge.getSnapshot().status, "ready", "目录就绪");
+assert.deepEqual(bridge.getSnapshot().groups.map((g) => g.id), ["p1"], "目录 groups 投影");
+assert.deepEqual(plugin.catalogOptions(bridge.getSnapshot().groups).items.map((i) => i.key), ["p1/m-a", "p1/m-b"], "目录快照可直接展开出面板候选项");
+assert.deepEqual(bridgeEvents.map((e) => e.event), [
+	"llm/adapters-updated", "settings/document-updated", "credentials/reference-updated", "connection/reset",
+], "订阅官方同款三个目录事件 + 连接重置");
+/* 目录事件 → 重载 */
+const fire = (event) => { for (const e of bridgeEvents.filter((x) => x.event === event)) e.listener(); };
+fire("settings/document-updated");
+assert.equal(bridge.getSnapshot().status, "loading", "目录事件触发重载");
+await new Promise((r) => setImmediate(r));
+assert.equal(bridge.getSnapshot().status, "ready", "重载完成");
+/* 连接重置 → 清旧值后重载 */
+fire("connection/reset");
+assert.deepEqual(bridge.getSnapshot().groups, [], "连接重置清旧值");
+await new Promise((r) => setImmediate(r));
+assert.equal(bridge.getSnapshot().status, "ready", "重置后代际重载");
+/* 切换：显式判结果信封（ok:false 不抛，交由点击路径降级） */
+bridgeSelectResponse = { ok: false, error: { code: "model-not-found", message: "unknown model" } };
+assert.deepEqual(await bridge.select("s-1", { provider: "p1", model: "m-a", reasoningEffort: "max" }),
+	{ ok: false, error: "unknown model" }, "信封 ok=false → 失败结果（不抛异常）");
+assert.deepEqual(bridgeSelectCalls.at(-1), { sessionId: "s-1", provider: "p1", model: "m-a", reasoningEffort: "max" }, "请求体 = 会话 + 三元组");
+bridgeSelectResponse = { ok: true, value: { selected: {} } };
+assert.deepEqual(await bridge.select("s-1", { provider: "p1", model: "m-b" }), { ok: true, error: "" }, "成功信封");
+assert.deepEqual(bridgeSelectCalls.at(-1), { sessionId: "s-1", provider: "p1", model: "m-b" }, "无等级不携带 reasoningEffort");
+bridgeSelectThrows = true;
+assert.deepEqual(await bridge.select("s-1", { provider: "p1", model: "m-a" }), { ok: false, error: "offline" }, "调用抛错 → 同样归一为失败结果");
+bridgeSelectThrows = false;
+/* 可切换判据（design D7）：子代理 / 无会话 id 一律 false */
+assert.equal(bridge.canSwitch("s-1"), true, "普通会话可切换");
+assert.equal(bridge.canSwitch("child-1"), false, "子代理会话不可切换");
+assert.equal(bridge.canSwitch(undefined), false, "无会话 id → false");
+/* 命名空间缺失 / 目录加载失败 → 整体降级 */
+bridgeCatalogResponse = { ok: false, error: { code: "offline", message: "no connection" } };
+fire("llm/adapters-updated");
+await new Promise((r) => setImmediate(r));
+assert.equal(bridge.getSnapshot().status, "error", "目录信封失败 → error（面板降级为仅跟随）");
+const bareBridge = plugin.createModelBridge({ remote: {}, sessions: {} });
+assert.equal(bareBridge.getSnapshot().status, "error", "注入不可用（无该命名空间）→ 目录 error");
+assert.deepEqual(await bareBridge.select("s-1", { provider: "p", model: "m" }), { ok: false, unavailable: true, error: "" },
+	"命名空间缺失 → 切换 unavailable（点击路径统一 toast 降级）");
+assert.equal(bareBridge.canSwitch("s-1"), false, "无法判定子代理人会话 → false（保守跳过）");
+bridge.dispose();
 
 console.log("quick-buttons-client-smoke: ok");
