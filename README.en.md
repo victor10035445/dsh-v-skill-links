@@ -31,6 +31,16 @@ Shared traits:
 
 > **Environment requirement**: Harness (`dsh`) **0.1.2-rc.1 or later**. The snapshot store and UI primitives the client depends on are provided by the web shell's static seed table; earlier versions lack that seed word and the plugin will fail to load.
 
+**Dual-generation host support and the degraded form**
+
+One codebase serves both DSH host generations: **Web CLI 0.1.5** (the `settingsScope` service) and **Desktop 0.2.0** (the `configForms` service; the former was removed upstream). The client declares only services both generations provide in its static dependency list (`inputTriggers` / `slots` / `locale`), and reaches settings through **two runtime channels** — whichever connects first is used, with no version sniffing.
+
+When neither channel is available (or when the host does not serve this plugin's config namespace on 0.2.0), the plugin **still activates** and degrades to read-only:
+
+- the three settings tabs show "This connection cannot persist settings" and the quick-button grid does not render (the button list is empty);
+- **mapped skills and custom commands are unaffected**: they ride the host `/api/v-skill-links/list` route and read config from the patch-layer entry config (`cordis.patch.yml`), which stays the authoritative fallback;
+- the host half likewise gates its settings-namespace registration on capability detection (the 0.2.0 `settings` service has no `register`): it skips silently — no error, no warning log, no effect on the routes.
+
 **Option 1 · Direct install from GitHub (recommended)** (zero build, no install-time scripts):
 
 ```sh
@@ -53,7 +63,7 @@ dsh plugin --profile web add "link:<clone path>"
 **Option 3 · tgz package install**:
 
 ```sh
-npm pack                                # produces dsh-v-skill-links-0.4.1.tgz
+npm pack                                # produces dsh-v-skill-links-0.5.1.tgz
 dsh plugin --profile web add "<absolute path to tgz>"
 ```
 
@@ -147,7 +157,7 @@ Zero npm dependencies, zero build steps — two entries + one manifest:
 | File | Responsibility |
 |---|---|
 | Host `lib/index.js` | Config normalization, settings namespace `v-skill-links` registration (patch config as base, settings.yaml user layer overrides, hot switching), directory scanning + TTL cache, `/api/v-skill-links` routes (list / run / skill), `agent/pre-step` `<skill_content>` injection |
-| Client `lib/client.js` | Two `/` trigger sources (Mapped Skills pinned, Custom Commands followup direct-send), quick buttons grid (session-mode composer.dock + new-session hero entry, mutually exclusive; button model binding = optional injection of the official client remote catalog/switch, degraded on failure), settings "Skill Manager" section + three tabs (staged save, override markers, per-section reset) |
+| Client `lib/client.js` | Two `/` trigger sources (Mapped Skills pinned, Custom Commands followup direct-send), quick buttons grid (session-mode composer.dock + new-session hero entry, mutually exclusive; button model binding = optional injection of the official client remote catalog/switch, degraded on failure), settings "Skill Manager" section + three tabs (staged save, override markers, per-section reset; the settings seam is normalized across two runtime channels, degrading to a synthesized read-only scope when neither connects) |
 | Manifest `package.json` | `dsh.bundle.patch` mounts the loader entry; `dsh.client` compiles the client into the /plugins startup graph |
 
 ## Relationship with native skills
@@ -182,11 +192,11 @@ node test/scan-smoke.mjs                     # config normalization / frontmatte
 node test/inject-smoke.mjs                   # token matching / message filtering / render shape
 node test/settings-schema-smoke.mjs          # settings schema contract / layered merge
 node test/buttons-schema-smoke.mjs           # quick button schema (normalization / dedup / autoSend / model passthrough)
-node test/settings-card-smoke.mjs            # settings section/tab contract (staged save / reset / dock registration / model draft)
+node test/settings-card-smoke.mjs            # settings section/tab contract (staged save / reset / dock registration / model draft / dual-host three-state matrix)
 node test/buttons-reorder-smoke.mjs          # button reorder (moveButton / drag & up-down)
-node test/host-apply-smoke.mjs               # apply wiring + API end-to-end + pre-step injection
-node test/client-shape-smoke.mjs             # client bundle shape (factory / trigger sources / contracts / model wiring)
-node test/quick-buttons-client-smoke.mjs     # quick buttons client (click semantics / projection / disable / model switch & catalog bridge)
+node test/host-apply-smoke.mjs               # apply wiring + API end-to-end + pre-step injection (settings three states: with register / without register / no service)
+node test/client-shape-smoke.mjs             # client bundle shape (factory / trigger sources / contracts / narrowed static list / model wiring)
+node test/quick-buttons-client-smoke.mjs     # quick buttons client (click semantics / projection / disable / model switch & catalog bridge / no grid when both seams are missing)
 ```
 
 ## License

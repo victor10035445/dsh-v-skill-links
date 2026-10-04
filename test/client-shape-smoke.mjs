@@ -18,7 +18,18 @@ assert.ok(code.includes("trigger: \"/\""), "绑定 / 触发");
 assert.ok(code.includes("order: -1"), "映射技能分组置顶（命令=默认 0 之前）");
 assert.ok(code.includes('name: "自定义指令"') && code.includes("order: -0.5"), "自定义指令分组紧跟其后");
 assert.ok(code.includes("registerSource(source)") && code.includes("registerSource(commandSource)"), "注册两个触发源");
-assert.ok(code.includes("exports.inject = inject") && code.includes('const inject = ["inputTriggers", "slots", "locale", "settingsScope"]'), "声明服务依赖");
+/* 静态清单收窄（change add-dual-host-seam-compat）：只留两类宿主都提供的服务；设置服务是版本
+   特有的（0.1.5 settingsScope / 0.2.0 configForms），放进静态 inject 会让缺失侧 entry 永久
+   pending（桌面端 fail-fast boot 直接整体启动失败）。 */
+const injectLiteral = /const inject = (\[[^\]]*\]);/.exec(code);
+assert.ok(injectLiteral, "静态 inject 清单存在");
+const injectList = JSON.parse(injectLiteral[1]);
+assert.deepEqual(injectList, ["inputTriggers", "slots", "locale"], "静态清单 = 两代宿主（0.1.5 / 0.2.0）交集");
+assert.ok(!injectList.includes("settingsScope") && !injectList.includes("configForms"), "版本特有设置服务 MUST NOT 进静态清单");
+assert.ok(code.includes("exports.inject = inject"), "exports.inject = inject 挂载契约保持不变（loader 实际读取位置）");
+assert.ok(code.includes('ctx.inject(["settingsScope"]') && code.includes('ctx.inject(["configForms"]'),
+	"设置读写经运行时双通道子注入（服务缺失只让该子任务 pending，不阻塞本体）");
+assert.ok(code.includes('const CONFIG_FORMS_ENTRY = "dsh-v-skill-links"'), "configForms 取键 = profile 条目 id");
 assert.ok(code.includes('fetch(API + "/list"'), "候选来自宿主 API");
 assert.ok(code.includes("matchByName(data.skills, query)") && code.includes("matchByName(data.commands ?? [], query)"), "两个分组都用子串匹配");
 assert.ok(code.includes("includes(q)") && code.includes("startsWith(q) ? 0 : 1"), "子串命中 + 前缀优先排序");
@@ -33,10 +44,18 @@ assert.ok(code.includes("resolveSlotLabel"), "标签经官方 resolveSlotLabel �
 assert.ok(code.includes("SkillManagerSection") && code.includes("MappingPanel") && code.includes("CommandsPanel") && code.includes("QuickPanel"), "节组件 + 三个面板组件");
 assert.ok(code.includes("installSectionCss") && code.includes("v-sm-section") && code.includes("v-sm-tab"), "节自有稳定 class（v-sm-*）");
 assert.ok(!code.includes('"settings.plugin.item"'), "settings.plugin.item 旧卡片已移除");
-assert.ok(code.includes('bind({'), "绑定设置作用域");
+assert.ok(code.includes('bind({'), "绑定设置作用域（settingsScope 通道原样透传）");
 assert.ok(code.includes('scope.set("directories"') && code.includes('scope.set("commands"') && code.includes('scope.set("buttons"'), "保存写 directories / commands / buttons 节");
 assert.ok(code.includes('scope.unset("directories"') && code.includes('scope.unset("commands"') && code.includes('scope.unset("buttons"'), "重置清对应覆盖");
 assert.ok(code.includes("createSnapshotStore"), "快照存储驱动节状态");
+/* 双代 seam 归一 + 降级底座（change add-dual-host-seam-compat）：归一目标就是控制器/store 已
+   消费的 { getSnapshot, subscribe, set, unset }；两通道皆缺时合成只读 scope（面板 notWritable）。 */
+assert.ok(code.includes("function createActiveScope()") && code.includes("function createReadOnlyScope()")
+	&& code.includes("function adaptConfigFormsChannel(sctx)") && code.includes("function bindSettingsScopeChannel(sctx)"),
+	"活动作用域层 + 只读底座 + 两通道适配齐备");
+assert.ok(code.includes("writable: false"), "降级快照呈 writable:false（面板走 notWritable 词典）");
+assert.ok(code.includes("exports.createActiveScope = createActiveScope") && code.includes("exports.adaptConfigFormsChannel = adaptConfigFormsChannel"),
+	"seam 内部面导出（smoke 直测 attach 所有权与通道归一）");
 /* 快捷按钮网格（conversation.composer.dock） */
 assert.ok(code.includes('"conversation.composer.dock"'), "注册输入卡片下方 dock 槽");
 assert.ok(code.includes('const DOCK_ID = "v-quick-buttons"') && code.includes("id: DOCK_ID"), "dock 条目 id（与官方 stats 行并肩）");

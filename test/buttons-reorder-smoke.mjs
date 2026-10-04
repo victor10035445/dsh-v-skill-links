@@ -140,8 +140,14 @@ const scope2 = {
 let registeredQuick = null;
 const ctx2 = {
 	effect: (fn) => { fn(); return () => {}; },
-	/* 可选注入桩（add-quick-button-model）：本用例只需面板草稿面；目录桥降级即可。 */
-	inject: (deps, fn) => fn({ remote: {}, sessions: {}, on: () => () => {} }),
+	/* 可选注入桩：设置 seam（本用例 = 仅 settingsScope 的 0.1.5 宿主）与模型目录
+	   （add-quick-button-model，本用例只需面板草稿面，目录桥降级即可）。
+	   MUST 按 deps 分支——新通道不得误喂非 scope 对象（change add-dual-host-seam-compat）。 */
+	inject: (deps, fn) => {
+		if (deps.includes("settingsScope")) return fn({ settingsScope: { bind: () => scope2 } });
+		if (deps.includes("configForms")) return undefined; /* 0.1.5 无 configForms：子任务保持 pending */
+		return fn({ remote: {}, sessions: {}, on: () => () => {} });
+	},
 	locale: {
 		register: () => () => {},
 		bind: () => (key) => key,
@@ -158,7 +164,6 @@ const ctx2 = {
 		},
 	},
 	get(name) {
-		if (name === "settingsScope") return { bind: () => scope2 };
 		if (name === "inputTriggers") return { registerSource: () => () => {} };
 		throw new Error(`unexpected service ${name}`);
 	},

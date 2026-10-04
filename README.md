@@ -31,6 +31,16 @@ DeepSeek Harness Web 的 **「/」菜单映射技能** 插件：把任意本地�
 
 > **环境要求**：Harness（`dsh`）**0.1.2-rc.1 及以上**。客户端依赖的快照 store 与 UI 原语由 web shell 静态种子表提供，更早版本没有该种子词，插件将无法加载。
 
+**双代宿主支持与降级形态**
+
+同一份代码同时支持两类 DSH 宿主：**Web CLI 0.1.5**（`settingsScope` 设置服务）与**桌面端 0.2.0**（`configForms` 设置服务，官方已移除前者）。客户端只把两类宿主都提供的服务写进静态依赖（`inputTriggers` / `slots` / `locale`），设置读写改由**运行时双通道**接入——任一通道接通即读写，不做版本号探测。
+
+两个通道都不可用时（或 0.2.0 上本插件的配置命名空间未被宿主服务时），插件**照常激活**并只读降级：
+
+- 设置页三个标签页显示「当前连接不支持持久设置修改」，输入区按钮网格不渲染（按钮列表为空）；
+- **映射技能与自定义指令不受影响**：它们走宿主 `/api/v-skill-links/list`，配置取补丁层 entry config（`cordis.patch.yml`），这始终是权威 fallback；
+- 宿主半区同样以能力检测决定是否注册设置命名空间（0.2.0 的 `settings` 服务没有 `register`）：静默跳过，不报错、不写告警日志、不影响路由。
+
 **方式一 · GitHub 地址直装（推荐）**（零构建、无安装期脚本）：
 
 ```sh
@@ -53,7 +63,7 @@ dsh plugin --profile web add "link:<克隆路径>"
 **方式三 · tgz 打包安装**：
 
 ```sh
-npm pack                                # 产出 dsh-v-skill-links-0.4.1.tgz
+npm pack                                # 产出 dsh-v-skill-links-0.5.1.tgz
 dsh plugin --profile web add "<tgz 的绝对路径>"
 ```
 
@@ -147,7 +157,7 @@ frontmatter 可省：技能名取目录名，描述取正文第一个非空行�
 | 文件 | 职责 |
 |---|---|
 | 宿主 `lib/index.js` | 配置归一化、设置命名空间 `v-skill-links` 注册（补丁层为 base、settings.yaml 用户层覆盖、热切换）、目录扫描 + TTL 缓存、`/api/v-skill-links` 路由（list / run / skill）、`agent/pre-step` 注入 `<skill_content>` |
-| 客户端 `lib/client.js` | `/` 触发源 ×2（映射技能置顶、自定义指令 followup 直发）、快捷按钮网格（会话态 composer.dock + 新增会话首屏 hero 条目互斥渲染；按钮模型绑定 = 可选注入的官方 client remote 目录/切换，失败降级）、设置页「技能管理」节 + 三标签页（暂存-保存、覆盖标记、段级重置） |
+| 客户端 `lib/client.js` | `/` 触发源 ×2（映射技能置顶、自定义指令 followup 直发）、快捷按钮网格（会话态 composer.dock + 新增会话首屏 hero 条目互斥渲染；按钮模型绑定 = 可选注入的官方 client remote 目录/切换，失败降级）、设置页「技能管理」节 + 三标签页（暂存-保存、覆盖标记、段级重置；设置 seam 经运行时双通道归一，皆缺则合成只读作用域） |
 | 声明 `package.json` | `dsh.bundle.patch` 挂 loader 条目；`dsh.client` 声明把客户端编入 /plugins 启动图 |
 
 ## 与原生技能的关系
@@ -182,11 +192,11 @@ node test/scan-smoke.mjs                     # 配置归一化 / frontmatter / �
 node test/inject-smoke.mjs                   # 令牌匹配 / 消息过滤 / 渲染形状
 node test/settings-schema-smoke.mjs          # 设置 schema 契约 / 分层合并
 node test/buttons-schema-smoke.mjs           # 快捷按钮 schema（归一化 / 去重 / autoSend / 模型绑定透传）
-node test/settings-card-smoke.mjs            # 设置节/标签页契约（暂存-保存 / 重置 / dock 注册 / 模型草稿）
+node test/settings-card-smoke.mjs            # 设置节/标签页契约（暂存-保存 / 重置 / dock 注册 / 模型草稿 / 双代宿主三态矩阵）
 node test/buttons-reorder-smoke.mjs          # 按钮排序（moveButton / 拖拽与上下移）
-node test/host-apply-smoke.mjs               # apply 接线 + API 端到端 + pre-step 注入
-node test/client-shape-smoke.mjs             # 客户端 bundle 形状（factory / 触发源 / 契约 / 模型绑定接线）
-node test/quick-buttons-client-smoke.mjs     # 快捷按钮客户端（点击语义 / 投影 / 禁用 / 模型切换与目录桥）
+node test/host-apply-smoke.mjs               # apply 接线 + API 端到端 + pre-step 注入（settings 三态：有 register / 无 register / 无服务）
+node test/client-shape-smoke.mjs             # 客户端 bundle 形状（factory / 触发源 / 契约 / 静态清单收窄 / 模型绑定接线）
+node test/quick-buttons-client-smoke.mjs     # 快捷按钮客户端（点击语义 / 投影 / 禁用 / 模型切换与目录桥 / 双 seam 缺失不渲染）
 ```
 
 ## License

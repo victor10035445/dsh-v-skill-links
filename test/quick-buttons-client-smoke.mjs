@@ -174,6 +174,10 @@ const ctx = {
 	effect: (fn) => { fn(); return () => {}; },
 	inject: (deps, fn) => {
 		injectedDeps.push(deps);
+		/* 设置 seam（本场景 = 仅 settingsScope 的 0.1.5 宿主）：MUST 按 deps 分支——
+		   新通道不得误喂非 scope 对象（change add-dual-host-seam-compat）。 */
+		if (deps.includes("settingsScope")) return fn({ settingsScope: { bind: () => sharedScope } });
+		if (deps.includes("configForms")) return undefined; /* 0.1.5 无 configForms：子任务保持 pending */
 		/* 模拟宿主 cordis 服务门（0.1.5-rc.2 回归保护）：remote.session 是独立服务键，
 		   作用域未声明时 `scope.remote.session` 读取直接抛错（目录桥随之永不就绪）。 */
 		const remote = deps.includes("remote.session") ? injectScope.remote
@@ -196,7 +200,6 @@ const ctx = {
 		},
 	},
 	get(name) {
-		if (name === "settingsScope") return { bind: () => sharedScope };
 		if (name === "inputTriggers") return { registerSource: () => () => {} };
 		throw new Error(`unexpected service ${name}`);
 	},
@@ -218,7 +221,8 @@ const dockPropsBound = registeredDock.options.inject("s-1");
 assert.equal(dockPropsBound.sessionId, "s-1", "inject 透传 sessionId");
 assert.equal(dockPropsBound.canSwitch, true, "普通会话可切换");
 assert.equal(registeredDock.options.inject("subagent-1").canSwitch, false, "子代理会话 → canSwitch: false（跳过切换）");
-assert.deepEqual(injectedDeps, [["remote", "remote.session", "sessions"]], "静态 inject 列表不动，模型目录服务集中在单处可选注入（remote.session 是 cordis 独立服务键，MUST 声明）");
+assert.deepEqual(injectedDeps, [["settingsScope"], ["configForms"], ["remote", "remote.session", "sessions"]],
+	"静态 inject 列表不动：设置双通道 + 模型目录服务集中在运行时可选子注入（remote.session 是 cordis 独立服务键，MUST 声明）");
 
 /* ── 4b. hero 条目注册契约（design D10：新增会话首屏经 conversation.input.dock 渲染同一网格） ── */
 assert.ok(registeredHero, "conversation.input.dock 槽位已注册（hero 条目）");
@@ -718,5 +722,47 @@ assert.deepEqual(await bareBridge.select("s-1", { provider: "p", model: "m" }), 
 	"命名空间缺失 → 切换 unavailable（点击路径统一 toast 降级）");
 assert.equal(bareBridge.canSwitch("s-1"), false, "无法判定子代理人会话 → false（保守跳过）");
 bridge.dispose();
+
+/* ── 7. 设置 seam 双缺场景（change add-dual-host-seam-compat）：两代通道皆缺 ⇒ 按钮网格不渲染 ──
+   模拟「两个设置服务都没有」的宿主：两个子注入回调都不执行（cordis 语义：服务缺失只让子
+   fiber pending），活动作用域层保持合成只读 scope ——按钮列表为空、dock 网格返回 null，
+   但槽位注册与插件激活照常。 */
+let noSeamDock = null;
+let noSeamHero = null;
+const noSeamInjects = [];
+const noSeamCtx = {
+	effect: (fn) => { fn(); return () => {}; },
+	inject: (deps, fn) => {
+		noSeamInjects.push(deps);
+		return undefined; /* settingsScope / configForms / remote.* 一个都不提供 */
+	},
+	locale: {
+		register: () => () => {},
+		bind: () => (key) => key,
+		getSnapshot: () => ({ revision: 1 }),
+		subscribe: () => () => {},
+	},
+	slots: {
+		register: (options, component) => ({ options, component }),
+		inject: (name, fn) => {
+			if (name === "conversation.composer.dock") noSeamDock = fn();
+			if (name === "conversation.input.dock") noSeamHero = fn();
+		},
+	},
+	get(name) {
+		if (name === "inputTriggers") return { registerSource: () => () => {} };
+		throw new Error(`unexpected service ${name}`);
+	},
+};
+plugin.apply(noSeamCtx);
+assert.deepEqual(noSeamInjects, [["settingsScope"], ["configForms"], ["remote", "remote.session", "sessions"]], "无 seam 宿主：三个子注入都注册、回调都不执行");
+assert.ok(noSeamDock && noSeamHero, "无 seam 宿主上两条 dock 槽位照常注册（激活不被设置服务阻塞）");
+const noSeamButtons = noSeamDock.options.inject().buttons;
+assert.deepEqual(noSeamButtons.getSnapshot().buttons, [], "合成只读 scope ⇒ 按钮列表为空");
+assert.equal(Grid({ input: { draft: "", phase: "plain" }, inputActions: makeActions(), buttons: noSeamButtons, t: (k) => k }), null,
+	"空列表 ⇒ dock 网格不渲染（零布局）");
+assert.equal(Grid({ input: { draft: "", phase: "plain" }, inputActions: makeActions(), buttons: noSeamHero.options.inject().buttons, hero: true,
+	session: { openState: "open", blank: true, running: false, promptAttempted: false }, t: (k) => k }), null,
+	"hero 条目同样不渲染（与 composer 条目互斥且列表为空）");
 
 console.log("quick-buttons-client-smoke: ok");

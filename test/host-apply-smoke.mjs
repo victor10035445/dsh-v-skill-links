@@ -248,6 +248,38 @@ try {
   apply(baseCtx, { directories: [root], buttons: [{ name: " 补丁按钮 ", prompt: " p " }] });
   assert.deepEqual(baseButtons.base.buttons, [{ name: " 补丁按钮 ", prompt: " p " }], "补丁层原样成为组合 base");
   assert.deepEqual(baseButtons.initial.buttons, [{ name: "补丁按钮", prompt: "p", autoSend: false }], "初始值归一化 buttons（autoSend 缺省 false）");
+
+  /* ══ 宿主半区第三态（change add-dual-host-seam-compat）：settings 服务在、但没有 register
+     （0.2.0 桌面端 SettingsForms）——显式能力检测静默跳过，不以异常作控制流、不发误报 warn ══ */
+  const warns = [];
+  const noRegisterCtx = {
+    webServer: { register: (opts) => { registered = opts; return () => {}; } },
+    effect: (fn, label) => { effects.push(label); fn(); },
+    on: (event, handler, opts) => { listeners.push({ event, handler, opts }); },
+    logger: { warn: (...args) => { warns.push(args); } },
+    inject(services, fn) {
+      if (!services.includes("settings")) return;
+      fn({
+        /* SettingsForms：settings 服务存在，但形状里**没有 register**（0.2.0 桌面端） */
+        settings: { describe: () => [] },
+        /* 跳过注册时 MUST NOT 再注册 watch effect（注册后才接的 watch 走这里） */
+        effect() { throw new Error("MUST NOT 注册 settings watch（已跳过注册）"); },
+      });
+    },
+  };
+  registered = null;
+  apply(noRegisterCtx, { directories: [root] });
+  assert.equal(warns.length, 0, "静默跳过：无告警日志（取代异常控制流）");
+  assert.equal(typeof registered?.handler, "function", "宿主路由照常注册（/api/v-skill-links/*）");
+  const listNoRegister = await (async () => {
+    let status = null;
+    let body = null;
+    await registered.handler({ method: "GET", url: "/api/v-skill-links/list" }, { writeHead: (s) => { status = s; }, end: (b) => { body = JSON.parse(b); } });
+    return { status, body };
+  })();
+  assert.equal(listNoRegister.status, 200, "跳过设置注册后 /list 照常 200");
+  assert.deepEqual(listNoRegister.body.skills.map((s) => s.name), ["alpha"], "/list 走 entryDirs fallback（补丁层 entry config 仍是权威来源）");
+  assert.deepEqual(listNoRegister.body.commands, [], "无设置命名空间时自定义指令为空数组（现状路径）");
   console.log("host-apply-smoke: ok");
 } finally {
   rmSync(base, { recursive: true, force: true });

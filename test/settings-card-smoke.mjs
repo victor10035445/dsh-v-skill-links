@@ -102,6 +102,27 @@ let registeredDock = null;
 const registeredSources = [];
 const disposers = [];
 const localeTable = { nav: "技能管理", title: "技能管理", tabMapping: "技能映射", tabCommands: "自定义指令", tabQuick: "快捷功能" };
+/* ── 设置 seam 三态开关（change add-dual-host-seam-compat）：主场景 = 仅 settingsScope（0.1.5 web CLI）。── */
+const providedSeams = new Set(["settingsScope"]);
+/* configForms 通道假件（0.2.0 桌面端）：只实现官方 ConfigFormController 的四个方法。 */
+const cfState = {
+	entryIds: [],
+	snapshot: { status: "unavailable", value: undefined, base: undefined, user: undefined, revision: undefined, writable: true, mode: "host" },
+	accept: true,
+	set: [],
+	unset: [],
+};
+const configFormsService = {
+	get(entryId) {
+		cfState.entryIds.push(entryId);
+		return {
+			getSnapshot: () => cfState.snapshot,
+			subscribe: () => () => {},
+			set: async (field, value) => { cfState.set.push([field, value]); return cfState.accept; },
+			unset: async (field) => { cfState.unset.push(field); return cfState.accept; },
+		};
+	},
+};
 /* 可选注入桩（add-quick-button-model）：remote / sessions 齐备 → 目录桥创建，面板拿得到候选项。 */
 const injectCalls = [];
 const modelCatalogCalls = [];
@@ -129,6 +150,12 @@ const ctx = {
 	effect(fn, label) { disposers.push({ label, dispose: fn() }); },
 	inject(deps, fn) {
 		injectCalls.push(deps);
+		/* 设置 seam 子注入（change add-dual-host-seam-compat）：服务缺失时 cordis 根本不调回调
+		   （只让该子任务 pending），这里如实模拟——MUST NOT 给新通道误喂非 scope 对象。 */
+		if (deps.includes("settingsScope")) return providedSeams.has("settingsScope")
+			? fn({ settingsScope: { bind: (spec) => { boundSpec = spec; return scope; } } })
+			: undefined;
+		if (deps.includes("configForms")) return providedSeams.has("configForms") ? fn({ configForms: configFormsService }) : undefined;
 		/* 模拟宿主 cordis 服务门（0.1.5-rc.2 回归保护）：remote.session 是独立服务键，
 		   作用域未声明时 `scope.remote.session` 读取直接抛错（目录桥随之永不就绪）。 */
 		const remote = deps.includes("remote.session") ? injectScope.remote
@@ -153,7 +180,7 @@ const ctx = {
 		},
 	},
 	get(name) {
-		if (name === "settingsScope") return { bind: (spec) => { boundSpec = spec; return scope; } };
+		/* settingsScope MUST NOT 再经 ctx.get 静态读取（本插件改为运行时子注入）；读到即回归。 */
 		if (name === "inputTriggers") return { registerSource: (src) => { registeredSources.push(src); return () => {}; } };
 		throw new Error(`unexpected service ${name}`);
 	},
@@ -218,7 +245,8 @@ face.discard();
 assert.equal(face.getSnapshot().buttonsDirty, false, "放弃修改清按钮暂存");
 
 /* ── 1.6 按钮模型绑定（add-quick-button-model）：editButton("model") 草稿 / 保存 / 取消绑定 / 回退 ── */
-assert.deepEqual(injectCalls, [["remote", "remote.session", "sessions"]], "模型目录为可选注入（remote.session 声明在列表：cordis 独立服务键，不声明读取即抛错）");
+assert.deepEqual(injectCalls, [["settingsScope"], ["configForms"], ["remote", "remote.session", "sessions"]],
+	"静态 inject 列表不动：设置双通道 + 模型目录全部走运行时可选子注入（remote.session 是 cordis 独立服务键，MUST 声明）");
 assert.equal(modelCatalogCalls.length, 1, "目录桥构造即预取一次（官方模型目录同款）");
 const quickTab = registeredTabs.find((t) => t.options.id === "quick");
 const quickProps = quickTab.options.inject();
@@ -330,6 +358,175 @@ await new Promise((r) => setImmediate(r));
 const runCall = fetchCalls.at(-1);
 assert.ok(runCall.url.endsWith("/api/v-skill-links/run"), "POST /run");
 assert.deepEqual(JSON.parse(runCall.init.body), { sessionId: "session-abc", name: "ship-it" });
+
+/* ══════════════ 9. 设置 seam 三态宿主矩阵（change add-dual-host-seam-compat，task 4.2/4.3） ══════════════
+   三态：仅 settingsScope（上面整段主场景）/ 仅 configForms（0.2.0 桌面端）/ 两者皆无。
+   断言三态下客户端均激活完成，设置卡分别呈可写、按 configForms 能力、合成只读 scope。 */
+const applyWith = (seams) => {
+	const seen = { section: null, tabs: [], dock: null, sources: [], injects: [] };
+	const localCtx = {
+		effect: (fn) => { fn(); return () => {}; },
+		inject(deps, fn) {
+			seen.injects.push(deps);
+			if (deps.includes("settingsScope")) return seams.settingsScope ? fn({ settingsScope: seams.settingsScope }) : undefined;
+			if (deps.includes("configForms")) return seams.configForms ? fn({ configForms: seams.configForms }) : undefined;
+			return undefined; /* 模型目录桥：三态矩阵不关心（降级路径已由主场景覆盖） */
+		},
+		locale: { register: () => () => {}, bind: () => (key) => key, getSnapshot: () => ({ revision: 1 }), subscribe: () => () => {} },
+		slots: {
+			register: (options, component) => ({ options, component }),
+			inject: (name, fn) => {
+				if (name === "settings.section") seen.section = fn();
+				if (name === "settings.v-skills.tab") seen.tabs.push(fn());
+				if (name === "conversation.composer.dock") seen.dock = fn();
+			},
+		},
+		get(name) {
+			if (name === "inputTriggers") return { registerSource: (src) => { seen.sources.push(src); return () => {}; } };
+			throw new Error(`unexpected service ${name}`);
+		},
+	};
+	plugin.apply(localCtx);
+	seen.face = seen.tabs.find((t) => t.options.id === "mapping")?.options.inject().face;
+	return seen;
+};
+
+/* 9a. 仅 configForms（0.2.0 桌面端）：命名空间未 served（本插件未声明 volatile 字段）⇒ 只读降级。 */
+cfState.entryIds.length = 0;
+const cfOnly = applyWith({ configForms: configFormsService });
+assert.deepEqual(cfOnly.injects, [["settingsScope"], ["configForms"], ["remote", "remote.session", "sessions"]],
+	"configForms 子注入已注册（settingsScope 侧保持 pending，不影响本体激活）");
+assert.deepEqual(cfState.entryIds, ["dsh-v-skill-links"], "configForms 以 profile 条目 id 取键（describe 的 ns = entry.options.id）");
+assert.ok(cfOnly.section && cfOnly.tabs.length === 3 && cfOnly.dock && cfOnly.sources.length === 2,
+	"仅 configForms 的宿主上节/三标签页/dock/两个触发源照常注册（激活不被通道形态阻塞）");
+const cfInitial = cfOnly.face.getSnapshot();
+assert.equal(cfInitial.available, true, "命名空间未 served 仍挂载（available=true：面板不整页空白）");
+assert.equal(cfInitial.status, "ready", "unavailable 归一到 ready 只读快照");
+assert.equal(cfInitial.writable, false, "文档级 writable 不透传：宿主只服务带 volatile 的条目 ⇒ 按只读");
+assert.deepEqual(cfInitial.effective, [], "未 served ⇒ 空 value（技能目录仍走宿主 API）");
+assert.ok(!cfOnly.face.getSnapshot().buttonsDraft.length && !cfOnly.face.getSnapshot().effectiveButtons.length, "按钮列表为空（dock 网格不渲染）");
+assert.deepEqual(cfOnly.dock.options.inject().buttons.getSnapshot().buttons, [], "dock 按钮快照为空列表");
+/* 只读态下动作不落到写路径：save/discard/reset 均提前返回 */
+cfOnly.face.edit("directories", "F:/x");
+await cfOnly.face.save();
+await cfOnly.face.resetField();
+await cfOnly.face.resetButtons();
+assert.deepEqual(cfState.set, [], "只读降级下 MUST NOT 触达宿主写路径");
+assert.deepEqual(cfState.unset, [], "只读降级下 MUST NOT 触达 unset");
+assert.equal(cfOnly.face.getSnapshot().dirty, true, "只读态草稿仍在（保存被 writable 拦下，非静默丢失）");
+
+/* 9b. 两者皆无：合成只读 scope（status ready / writable false / 空 value），激活照常。 */
+const none = applyWith({});
+assert.deepEqual(none.injects, [["settingsScope"], ["configForms"], ["remote", "remote.session", "sessions"]],
+	"两个设置通道都注册（服务皆缺 → 两个子 fiber 保持 pending，不阻塞本体）");
+assert.ok(none.section && none.tabs.length === 3 && none.dock && none.sources.length === 2, "皆无 seam 时槽位注册与触发源照常");
+const noneState = none.face.getSnapshot();
+assert.equal(noneState.available, true, "合成只读 scope 让面板可渲染（notWritable 形态）");
+assert.equal(noneState.status, "ready");
+assert.equal(noneState.writable, false, "合成只读 scope：writable false");
+assert.equal(noneState.text, "", "空 value ⇒ 目录草稿为空");
+assert.deepEqual(none.dock.options.inject().buttons.getSnapshot().buttons, [], "按钮列表为空（dock 网格不渲染）");
+
+/* ══════════════ 10. seam 层直测（导出内部面）：只读底座 / attach 所有权 / 通道归一 ══════════════ */
+const ro = plugin.createReadOnlyScope();
+assert.equal(ro.getSnapshot().status, "ready", "只读底座快照 status ready");
+assert.equal(ro.getSnapshot().writable, false, "只读底座 writable false");
+assert.deepEqual(ro.getSnapshot().value, {}, "只读底座空 value");
+assert.equal(typeof ro.subscribe(() => {}), "function", "只读底座 subscribe 返回 disposer");
+await assert.rejects(ro.set("buttons", []), /read-only/, "只读底座 set 拒绝");
+await assert.rejects(ro.unset("buttons"), /read-only/, "只读底座 unset 拒绝");
+
+/* bind 原样透传（零适配）：0.1.5 路径逐字节不变 */
+const passthrough = { getSnapshot: () => ({ status: "ready" }), subscribe: () => () => {}, set: async () => {}, unset: async () => {} };
+let passthroughSpec = null;
+const bound = plugin.bindSettingsScopeChannel({ settingsScope: { bind: (spec) => { passthroughSpec = spec; return passthrough; } } });
+assert.equal(bound, passthrough, "settingsScope 通道原样透传");
+assert.equal(passthroughSpec.namespace, "v-skill-links", "命名空间 = SETTINGS_NS");
+assert.equal(passthroughSpec.decode({ a: 1 }).a, 1, "decode 透传对象节");
+assert.equal(passthroughSpec.decode(null), undefined, "decode 拒绝非对象节");
+assert.equal(plugin.bindSettingsScopeChannel({ settingsScope: {} }), undefined, "服务形状不符 → 降级");
+assert.equal(plugin.bindSettingsScopeChannel({}), undefined, "服务缺失 → 降级");
+
+/* attach 所有权：先到者持有、后到者忽略；句柄只拆自己接的连接且幂等 */
+const makeSeamScope = (tag) => {
+	const listeners = new Set();
+	const snapshot = { status: "ready", value: { tag }, base: {}, user: null, writable: true, mode: "host" };
+	return {
+		getSnapshot: () => snapshot,
+		subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+		set: async () => {},
+		unset: async () => {},
+		subscriberCount: () => listeners.size,
+		emit: () => { for (const l of [...listeners]) l(); },
+	};
+};
+const active = plugin.createActiveScope();
+assert.equal(active.getSnapshot().writable, false, "未 attach 时保持合成只读");
+const seamA = makeSeamScope("A");
+const seamB = makeSeamScope("B");
+let forwarded = 0;
+active.subscribe(() => { forwarded += 1; });
+const handleA = active.attach(seamA);
+assert.equal(typeof handleA, "function", "attach 返回活动连接句柄");
+assert.equal(active.getSnapshot().value.tag, "A", "接通后快照来自通道作用域");
+assert.equal(seamA.subscriberCount(), 1, "活动连接被订阅（变更向外转发）");
+assert.equal(forwarded, 1, "attach 即通知本层订阅者重取快照（面板立刻从只读态翻到可写态）");
+seamA.emit();
+assert.equal(forwarded, 2, "通道变更转发到本层订阅者");
+await active.set("buttons", []);
+assert.equal(active.attach(seamB), null, "已有活动连接：后到者被忽略（返回 null，不登记 disposer）");
+assert.equal(seamB.subscriberCount(), 0, "被忽略的通道 MUST NOT 被订阅");
+handleA();
+assert.equal(active.getSnapshot().writable, false, "句柄拆回合成只读底座");
+assert.equal(seamA.subscriberCount(), 0, "拆后不再订阅旧通道");
+handleA();
+assert.equal(active.getSnapshot().writable, false, "dispose 幂等（重复调用无副作用）");
+const handleB = active.attach(seamB);
+assert.equal(typeof handleB, "function", "前一连接拆走后，另一通道可接手");
+assert.equal(active.getSnapshot().value.tag, "B");
+assert.equal(active.attach(seamA), null, "B 持有期间 A 仍被忽略");
+handleB();
+active.dispose();
+assert.equal(seamB.subscriberCount(), 0, "dispose 卸载内层订阅");
+
+/* configForms 归一：served + host + writable → 透传并可写；memory / 未 served → 只读；false 结果抛错 */
+const makeForms = (snapshot) => {
+	const state = { snapshot, accept: true, calls: { set: [], unset: [] } };
+	return {
+		state,
+		service: {
+			get: () => ({
+				getSnapshot: () => state.snapshot,
+				subscribe: () => () => {},
+				set: async (field, value) => { state.calls.set.push([field, value]); return state.accept; },
+				unset: async (field) => { state.calls.unset.push(field); return state.accept; },
+			}),
+		},
+	};
+};
+const served = makeForms({
+	status: "ready", value: { buttons: [{ name: "x", prompt: "p", autoSend: false }] }, base: {}, user: null,
+	revision: 3, writable: true, mode: "host",
+});
+const servedScope = plugin.adaptConfigFormsChannel({ configForms: served.service });
+assert.equal(servedScope.getSnapshot().writable, true, "served + host：writable 透传");
+assert.deepEqual(servedScope.getSnapshot().value.buttons.map((b) => b.name), ["x"], "served：value 透传");
+await servedScope.set("buttons", []);
+await servedScope.unset("buttons");
+assert.deepEqual(served.state.calls.set, [["buttons", []]], "可写时写路径落宿主 form.set");
+assert.deepEqual(served.state.calls.unset, ["buttons"], "可写时 unset 落宿主 form.unset（重置为组合层）");
+served.state.accept = false;
+await assert.rejects(servedScope.set("buttons", []), /refused/, "宿主拒绝（返回 false）抛错 → 卡片走 saveFailed 而非静默成功");
+served.state.snapshot = { ...served.state.snapshot, mode: "memory" };
+assert.equal(servedScope.getSnapshot().writable, false, "memory（非回环页面）写入落空 ⇒ 按只读呈现");
+/* 写路径缺失（未来 API 变动）⇒ 通道降级只读（design D3 兜底口径） */
+const noWriteApi = plugin.adaptConfigFormsChannel({
+	configForms: { get: () => ({ getSnapshot: () => ({ status: "ready", value: {}, writable: true, mode: "host" }), subscribe: () => () => {} }) },
+});
+assert.equal(noWriteApi.getSnapshot().writable, false, "form 无 set/unset ⇒ 只读");
+await assert.rejects(noWriteApi.set("buttons", []), /read-only/);
+assert.equal(plugin.adaptConfigFormsChannel({ configForms: {} }), undefined, "configForms 形状不符 → 降级");
+assert.equal(plugin.adaptConfigFormsChannel({}), undefined, "configForms 缺失 → 降级");
 
 for (const d of disposers) d.dispose?.();
 console.log("settings-card-smoke: ok");
