@@ -28,6 +28,6 @@
   },
   "scripts": {
     "check": "node --check lib/index.js && node --check lib/client.js",
-    "test": "node test/scan-smoke.mjs && node test/inject-smoke.mjs && node test/settings-schema-smoke.mjs && node test/buttons-schema-smoke.mjs && node test/settings-card-smoke.mjs && node test/buttons-reorder-smoke.mjs && node test/host-apply-smoke.mjs && node test/client-shape-smoke.mjs && node test/quick-buttons-client-smoke.mjs"
+    "test": "node test/scan-smoke.mjs && node test/inject-smoke.mjs && node test/settings-schema-smoke.mjs && node test/buttons-schema-smoke.mjs && node test/shared-store-smoke.mjs && node test/settings-card-smoke.mjs && node test/buttons-reorder-smoke.mjs && node test/host-apply-smoke.mjs && node test/client-shape-smoke.mjs && node test/quick-buttons-client-smoke.mjs"
   }
 }

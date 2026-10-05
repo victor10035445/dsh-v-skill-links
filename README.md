@@ -33,9 +33,9 @@ DeepSeek Harness Web 的 **「/」菜单映射技能** 插件：把任意本地�
 
 **双代宿主支持与降级形态**
 
-同一份代码同时支持两类 DSH 宿主：**Web CLI 0.1.5**（`settingsScope` 设置服务）与**桌面端 0.2.0**（`configForms` 设置服务，官方已移除前者）。客户端只把两类宿主都提供的服务写进静态依赖（`inputTriggers` / `slots` / `locale`），设置读写改由**运行时双通道**接入——任一通道接通即读写，不做版本号探测。
+同一份代码同时支持两类 DSH 宿主：**Web CLI 0.1.5**（`settingsScope` 设置服务）与**桌面端 0.2.0**（`configForms` 设置服务，官方已移除前者）。客户端只把两类宿主都提供的服务写进静态依赖（`inputTriggers` / `slots` / `locale`）；设置读写由插件**自营的共享配置存储**承担（见「两端共用配置」），两代宿主的设置服务降为 fallback —— 均经运行时子注入接入，不做版本号探测。
 
-两个通道都不可用时（或 0.2.0 上本插件的配置命名空间未被宿主服务时），插件**照常激活**并只读降级：
+自营 API 与两条宿主设置通道**都**不可用时（例如宿主半区为旧版本时 404、且宿主不提供设置服务），插件**照常激活**并只读降级：
 
 - 设置页三个标签页显示「当前连接不支持持久设置修改」，输入区按钮网格不渲染（按钮列表为空）；
 - **映射技能与自定义指令不受影响**：它们走宿主 `/api/v-skill-links/list`，配置取补丁层 entry config（`cordis.patch.yml`），这始终是权威 fallback；
@@ -129,6 +129,33 @@ description: 按团队规范审查当前改动并输出分级意见
 
 frontmatter 可省：技能名取目录名，描述取正文第一个非空行。
 
+## 两端共用配置（web ⇄ 桌面端）
+
+设置页（技能管理）保存的内容不再写进任何宿主管理的文档，而是落进**插件私有的共享配置文件**：
+
+```
+$DSH_HOME/v-skill-links.config.json          # 默认 ~/.dsh/v-skill-links.config.json
+$DSH_HOME/v-skill-links.config.json.bak.1~3  # 每次成功写入前的备份（复制式轮转，保留 3 份）
+```
+
+`$DSH_HOME` 的解析与宿主一致（`DSH_HOME` 环境变量非空则用之，否则 `~/.dsh`），因此 **Web CLI 与桌面端读写同一份文件**：任一端保存，另一端在秒级内跟随（宿主监视文件热重载 + 客户端 5 秒轮询），无需重启、无需刷新页面。桌面端设置页由此变为可写——不再显示「当前连接不支持持久设置修改」。
+
+**合并链**（生效值 = 从左到右逐层覆盖）：
+
+```
+补丁层 cordis.patch.yml entry config  →  既有用户文档（settings.yaml，只读兼容层）  →  共享存储（设置页读写层）
+```
+
+- 共享存储里的**节缺席** = 未自定义（回落前两层）；节存在（含空数组）= 显式覆盖；
+- 「重置为组合层」= 删除该节，回落到补丁层 / 既有用户文档的值，**不会丢数据**；
+- 插件**绝不写** `~/.dsh/settings.yaml` 与任何 profile 的 `cordis.patch.yml`。
+
+**同时保存（CAS）**：每个文件带单调递增的 `revision`，保存请求携带读取时的 revision；两端同时保存时**先写者成功、后写者收到 409**（设置页提示「保存未生效，请重试」，草稿保留，随后自动重拉最新值即可再存）。写入在跨进程锁内完成校验与落盘（临时文件 + 原子替换），因此不会出现半写文件；锁等待超时（约 1 秒）返回 503，可原样重试。文件被手工改坏时按 `.bak.1 → .bak.2 → .bak.3` 依次恢复，全损则回落前两层。
+
+**相对路径建议**：保存时目录会**就地绝对化**（`~` 展开为用户主目录，相对路径按**保存方宿主进程的启动目录**解析），落盘的是绝对路径，所以两端读到的值一致。若两个宿主的启动目录不同，建议直接填绝对路径或 `~/...`，避免歧义。
+
+**通道优先级与降级形态**：设置读写首选插件自营 API 通道（`GET/PUT /api/v-skill-links/config`）；宿主设置服务（0.1.5 `settingsScope` / 0.2.0 `configForms`）在 API 不可达时自动接管（桌面端残留的 `configForms`、以及旧版宿主半区即走此路）；三条都不可达才只读降级。视图语义：`base` = 组合层，`user` = 共享存储的节，`value` = 生效值。
+
 ## 使用
 
 1. 输入框输入 `/` → 菜单出现 **命令 / 技能 / 映射技能** 分组；
@@ -156,8 +183,8 @@ frontmatter 可省：技能名取目录名，描述取正文第一个非空行�
 
 | 文件 | 职责 |
 |---|---|
-| 宿主 `lib/index.js` | 配置归一化、设置命名空间 `v-skill-links` 注册（补丁层为 base、settings.yaml 用户层覆盖、热切换）、目录扫描 + TTL 缓存、`/api/v-skill-links` 路由（list / run / skill）、`agent/pre-step` 注入 `<skill_content>` |
-| 客户端 `lib/client.js` | `/` 触发源 ×2（映射技能置顶、自定义指令 followup 直发）、快捷按钮网格（会话态 composer.dock + 新增会话首屏 hero 条目互斥渲染；按钮模型绑定 = 可选注入的官方 client remote 目录/切换，失败降级）、设置页「技能管理」节 + 三标签页（暂存-保存、覆盖标记、段级重置；设置 seam 经运行时双通道归一，皆缺则合成只读作用域） |
+| 宿主 `lib/index.js` | 配置归一化、插件私有共享存储（`$DSH_HOME/v-skill-links.config.json`：锁内 CAS 写入 / 复制式备份轮转 / 原子替换 / 损坏恢复链 / `fs.watch` 热重载 / 幂等播种与空存储一次性升级）、设置命名空间 `v-skill-links` 注册（组合层 = 补丁层 entry config ← settings.yaml 只读兼容层，热切换）、目录扫描 + TTL 缓存、`/api/v-skill-links` 路由（list / run / skill / config）、`agent/pre-step` 注入 `<skill_content>` |
+| 客户端 `lib/client.js` | `/` 触发源 ×2（映射技能置顶、自定义指令 followup 直发）、快捷按钮网格（会话态 composer.dock + 新增会话首屏 hero 条目互斥渲染；按钮模型绑定 = 可选注入的官方 client remote 目录/切换，失败降级）、设置页「技能管理」节 + 三标签页（暂存-保存、覆盖标记、段级重置；设置通道 = API 优先、双 seam 待命回落、皆缺则合成只读作用域） |
 | 声明 `package.json` | `dsh.bundle.patch` 挂 loader 条目；`dsh.client` 声明把客户端编入 /plugins 启动图 |
 
 ## 与原生技能的关系
@@ -176,13 +203,15 @@ frontmatter 可省：技能名取目录名，描述取正文第一个非空行�
 - **注入不回放**：注入只发生在消息进入的那一步，会话恢复后历史令牌不再重复注入（与原生手势一致）；
 - **只扫一级子目录**：更深的目录不索引；
 - **按钮网格的作用域**：子代理会话的输入框下方同样出现（dock 是 session 作用域，配置全局）；composer 被其他插件 block 时按钮仍可点击，追加作用于暂时不可见的草稿，block 清除后可见可撤销；
-- **样式覆盖**：`.v-qb-*` 钩子依赖「插件 style 标签追加在 head 末尾、同特异性后到者胜」，悬停提示用原生 `title`。
+- **样式覆盖**：`.v-qb-*` 钩子依赖「插件 style 标签追加在 head 末尾、同特异性后到者胜」，悬停提示用原生 `title`；
+- **桌面端与 web 的配置一致性**：两端共用 `$DSH_HOME/v-skill-links.config.json`（见「两端共用配置」）；配置**只经由设置页**写共享存储，手工编辑 `settings.yaml` 只影响共享存储里**没有**的节（同名节被共享存储遮蔽，值不会丢）；
+- **旧版本回退**：卸载/回退插件版本后共享存储文件被旧代码忽略（惰性保留，不删除）；仅经新设置页写入、尚未体现在补丁层或用户文档的修改，回退后不再显示，需要时可手工并回 `cordis.patch.yml` 的 entry config。
 
 ## 从源码验证
 
 ```sh
 pnpm check                                   # node --check 两个入口
-pnpm test                                    # 依次跑全部 9 个 smoke 测试
+pnpm test                                    # 依次跑全部 10 个 smoke 测试
 ```
 
 或逐个运行：
@@ -192,11 +221,12 @@ node test/scan-smoke.mjs                     # 配置归一化 / frontmatter / �
 node test/inject-smoke.mjs                   # 令牌匹配 / 消息过滤 / 渲染形状
 node test/settings-schema-smoke.mjs          # 设置 schema 契约 / 分层合并
 node test/buttons-schema-smoke.mjs           # 快捷按钮 schema（归一化 / 去重 / autoSend / 模型绑定透传）
-node test/settings-card-smoke.mjs            # 设置节/标签页契约（暂存-保存 / 重置 / dock 注册 / 模型草稿 / 双代宿主三态矩阵）
+node test/shared-store-smoke.mjs             # 共享存储（路径解析 / 损坏恢复链 / 锁与 CAS / 备份轮转无缺席窗口 / 独占播种与升级）
+node test/settings-card-smoke.mjs            # 设置节/标签页契约（暂存-保存 / 重置 / dock 注册 / 模型草稿 / 四态宿主矩阵 + API 通道 CAS 与 standby 晋升）
 node test/buttons-reorder-smoke.mjs          # 按钮排序（moveButton / 拖拽与上下移）
-node test/host-apply-smoke.mjs               # apply 接线 + API 端到端 + pre-step 注入（settings 三态：有 register / 无 register / 无服务）
-node test/client-shape-smoke.mjs             # 客户端 bundle 形状（factory / 触发源 / 契约 / 静态清单收窄 / 模型绑定接线）
-node test/quick-buttons-client-smoke.mjs     # 快捷按钮客户端（点击语义 / 投影 / 禁用 / 模型切换与目录桥 / 双 seam 缺失不渲染）
+node test/host-apply-smoke.mjs               # apply 接线 + API 端到端 + pre-step 注入 + 共享存储 GET/PUT（200/409/400/503）与热重载
+node test/client-shape-smoke.mjs             # 客户端 bundle 形状（factory / 触发源 / 契约 / 静态清单收窄 / 通道挂载顺序）
+node test/quick-buttons-client-smoke.mjs     # 快捷按钮客户端（点击语义 / 投影 / 禁用 / 模型切换与目录桥 / 通道缺失不渲染）
 ```
 
 ## License

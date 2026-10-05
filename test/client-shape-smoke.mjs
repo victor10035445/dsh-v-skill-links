@@ -56,6 +56,24 @@ assert.ok(code.includes("function createActiveScope()") && code.includes("functi
 assert.ok(code.includes("writable: false"), "降级快照呈 writable:false（面板走 notWritable 词典）");
 assert.ok(code.includes("exports.createActiveScope = createActiveScope") && code.includes("exports.adaptConfigFormsChannel = adaptConfigFormsChannel"),
 	"seam 内部面导出（smoke 直测 attach 所有权与通道归一）");
+/* 共享配置存储 API 通道 + 待命位（change shared-config-store）：第三通道为读写首选，apply 内
+   同步 attach（seam 子注入回调异步 ⇒ 先到者持有语义下必然赢）；首取失败经句柄自拆，待命 seam 晋升。 */
+assert.ok(code.includes('const CONFIG_POLL_MS = 5000'), "订阅期 5s revision 轮询间隔");
+assert.ok(code.includes('API + "/config"'), "API 通道打 /api/v-skill-links/config");
+assert.ok(code.includes("function createApiChannel(options = {})") && code.includes("exports.createApiChannel = createApiChannel"),
+	"API 通道适配器存在并导出（冒烟直测）");
+assert.ok(code.includes("let standby = null;") && code.includes("const promoted = standby;"),
+	"活动作用域提供待命位：活动连接拆卸时自动晋升待命者（fallback 与 seam 解析时序无关）");
+assert.ok(code.includes("standby = next;") && code.includes("if (standby !== null) return null;"),
+	"首个后来者静默登记待命（不订阅、无日志），第二个及以后仍忽略");
+assert.ok(code.includes("retire()"), "首取失败经 attach 句柄自拆并停止轮询（静默退场）");
+/* 挂载顺序契约（源码级）：API 通道 attach 必须先于两条 seam 子注入 */
+const apiAttachAt = code.indexOf("apiChannel.bind(activeScope.attach(apiChannel));");
+const seamInjectAt = code.indexOf('ctx.inject(["settingsScope"]');
+const formsInjectAt = code.indexOf('ctx.inject(["configForms"]');
+assert.ok(apiAttachAt > 0, "apply 内同步 attach API 通道");
+assert.ok(apiAttachAt < seamInjectAt && apiAttachAt < formsInjectAt,
+	"API 通道 attach 先于两个 seam 子注入（apply 内同步 ⇒ 恒先到，seam 只能登记待命）");
 /* 快捷按钮网格（conversation.composer.dock） */
 assert.ok(code.includes('"conversation.composer.dock"'), "注册输入卡片下方 dock 槽");
 assert.ok(code.includes('const DOCK_ID = "v-quick-buttons"') && code.includes("id: DOCK_ID"), "dock 条目 id（与官方 stats 行并肩）");

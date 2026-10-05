@@ -63,6 +63,14 @@ const runtimeStub = {
 };
 const requireStub = (spec) => (spec === "react" ? reactStub : spec === "@deepseek-ai/dsh-client-store" ? runtimeStub : spec === "@deepseek-ai/dsh-client-ui-primitives" ? primitivesStub : spec === "@deepseek-ai/dsh-client-ui-slots" ? slotsPkgStub : null);
 
+/* 设置 API 桩（change shared-config-store）：/config 一律 404 —— 模拟宿主半区为旧版本（无该路由），
+   API 通道首取失败静默自拆并停止轮询，本用例专测的 settingsScope 通道由待命位晋升接管。 */
+globalThis.fetch = async (url) => (String(url).endsWith("/config")
+	? { ok: false, status: 404, json: async () => ({ error: "unknown route" }) }
+	: { ok: true, status: 200, json: async () => ({ skills: [], directories: [], commands: [] }) });
+/** 等 API 通道首取失败并完成自拆 / 待命晋升。 */
+const settleChannels = () => new Promise((r) => setImmediate(r));
+
 new Function("window", "require", code)(windowStub, requireStub);
 assert.ok(definition, "捕获到 load 定义");
 const plugin = definition.factory(requireStub);
@@ -169,6 +177,7 @@ const ctx2 = {
 	},
 };
 plugin.apply(ctx2);
+await settleChannels(); /* API 通道 404 自拆 → settingsScope 由待命位晋升接管 */
 const face = registeredQuick.options.inject().face;
 const names = () => face.getSnapshot().buttonsDraft.map((b) => b.name);
 

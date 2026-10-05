@@ -56,6 +56,14 @@ const runtimeStub = {
 };
 const requireStub = (spec) => (spec === "react" ? reactStub : spec === "@deepseek-ai/dsh-client-store" ? runtimeStub : spec === "@deepseek-ai/dsh-client-ui-primitives" ? primitivesStub : spec === "@deepseek-ai/dsh-client-ui-slots" ? slotsPkgStub : null);
 
+/* 设置 API 桩（change shared-config-store）：/config 一律 404 —— 模拟宿主半区为旧版本（无该路由），
+   API 通道首取失败静默自拆并停止轮询，用例专测的 seam 通道随即由待命位晋升接管。 */
+globalThis.fetch = async (url) => (String(url).endsWith("/config")
+	? { ok: false, status: 404, json: async () => ({ error: "unknown route" }) }
+	: { ok: true, status: 200, json: async () => ({ skills: [], directories: [], commands: [] }) });
+/** 等 API 通道首取失败并完成自拆 / 待命晋升（一次宏任务足够排空 fetch 的微任务链）。 */
+const settleChannels = () => new Promise((r) => setImmediate(r));
+
 new Function("window", "require", code)(windowStub, requireStub);
 assert.ok(definition, "捕获到 load 定义");
 const plugin = definition.factory(requireStub);
@@ -205,6 +213,7 @@ const ctx = {
 	},
 };
 plugin.apply(ctx);
+await settleChannels(); /* API 通道 404 自拆 → settingsScope 由待命位晋升接管 */
 assert.ok(registeredDock, "conversation.composer.dock 槽位已注册");
 assert.equal(registeredDock.options.name, "conversation.composer.dock");
 assert.equal(registeredDock.options.id, "v-quick-buttons");
@@ -755,6 +764,7 @@ const noSeamCtx = {
 	},
 };
 plugin.apply(noSeamCtx);
+await settleChannels(); /* API 通道自拆后无待命 seam ⇒ 回落合成只读 scope */
 assert.deepEqual(noSeamInjects, [["settingsScope"], ["configForms"], ["remote", "remote.session", "sessions"]], "无 seam 宿主：三个子注入都注册、回调都不执行");
 assert.ok(noSeamDock && noSeamHero, "无 seam 宿主上两条 dock 槽位照常注册（激活不被设置服务阻塞）");
 const noSeamButtons = noSeamDock.options.inject().buttons;
