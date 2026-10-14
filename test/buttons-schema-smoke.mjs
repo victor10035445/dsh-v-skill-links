@@ -1,6 +1,6 @@
 /**
  * 快捷按钮 schema 冒烟：normalizeButtons 归一化语义（trim / 空条目剔除 / name 去重 /
- * autoSend 布尔归一 / 上限 32 / 校验抛错；显示名不套用 commands 小写正则）+
+ * autoSend 布尔归一 / prepend 条件键 / 上限 32 / 校验抛错；显示名不套用 commands 小写正则）+
  * settingsSchema 的 buttons 字段契约 + 分层合并（base 用户层覆盖 / scope 语义）。
  * 运行：node test/buttons-schema-smoke.mjs
  */
@@ -89,6 +89,51 @@ assert.throws(() => schema({ buttons: [{ name: "a", prompt: "p", model: { provid
 assert.deepEqual(schema({ buttons: [{ name: "a", prompt: "p", model: { provider: "p1", model: "m1", reasoningEffort: "max" } }] }).buttons,
 	[{ name: "a", prompt: "p", autoSend: false, model: { provider: "p1", model: "m1", reasoningEffort: "max" } }],
 	"schema 归一化保留 model（宿主 MUST 显式透传，否则存储留不住）");
+
+/* ── 6.6 可选 prepend 前插开关（add-quick-button-prepend）：条件键 / 键序 / 校验 / 零迁移 ── */
+/* 键出现当且仅当 true：false / undefined / null / 缺省一律不输出该键（存储形状最小）。 */
+for (const [label, raw] of [
+	["缺省", { name: "a", prompt: "p" }],
+	["undefined", { name: "a", prompt: "p", prepend: undefined }],
+	["null（与 autoSend 同款容忍，不因 null 拒绝）", { name: "a", prompt: "p", prepend: null }],
+	["显式 false（有意剥除）", { name: "a", prompt: "p", prepend: false }],
+]) {
+	const entry = normalizeButtons([raw])[0];
+	assert.deepEqual(entry, { name: "a", prompt: "p", autoSend: false }, `${label} → 归一化结果不含 prepend 键`);
+	assert.ok(!("prepend" in entry), `${label} → 键缺席（点击行为为后插）`);
+}
+const prepended = normalizeButtons([{ name: "a", prompt: "p", prepend: true }])[0];
+assert.deepEqual(prepended, { name: "a", prompt: "p", autoSend: false, prepend: true }, "prepend: true 保留输出");
+assert.deepEqual(Object.keys(prepended), ["name", "prompt", "autoSend", "prepend"], "键序：prepend 在 model 之前（autoSend 之后）");
+assert.deepEqual(
+	Object.keys(normalizeButtons([{ name: "a", prompt: "p", prepend: true, model: { provider: "p", model: "m" } }])[0]),
+	["name", "prompt", "autoSend", "prepend", "model"],
+	"键序固定 name → prompt → autoSend → prepend → model",
+);
+assert.deepEqual(
+	Object.keys(normalizeButtons([{ name: "a", prompt: "p", prepend: true, autoSend: true, model: { provider: "p", model: "m", reasoningEffort: "max" } }])[0]),
+	["name", "prompt", "autoSend", "prepend", "model"],
+	"全字段条目键序同样固定",
+);
+/* 非法 prepend：非布尔（字符串/数字/对象）一律拒绝。 */
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", prepend: "yes" }]), /prepend must be a boolean/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", prepend: 1 }]), /prepend must be a boolean/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", prepend: 0 }]), /prepend must be a boolean/);
+assert.throws(() => normalizeButtons([{ name: "a", prompt: "p", prepend: {} }]), /prepend must be a boolean/);
+assert.throws(() => schema({ buttons: [{ name: "a", prompt: "p", prepend: "前插" }] }), /prepend must be a boolean/, "schema 写入路径同样拒绝");
+/* 旧数据（无 prepend）逐字不变：零迁移。 */
+assert.deepEqual(
+	normalizeButtons([{ name: "旧", prompt: "p", autoSend: true }, { name: "旧2", prompt: "p2", model: { provider: "p", model: "m" } }]),
+	[{ name: "旧", prompt: "p", autoSend: true }, { name: "旧2", prompt: "p2", autoSend: false, model: { provider: "p", model: "m" } }],
+	"旧数据（无 prepend）逐字不变（不补键、不改行为）",
+);
+/* schema 归一化保留 prepend（宿主 MUST 显式透传，否则存储留不住）。 */
+assert.deepEqual(schema({ buttons: [{ name: "a", prompt: "p", prepend: true }] }).buttons,
+	[{ name: "a", prompt: "p", autoSend: false, prepend: true }],
+	"schema 归一化保留 prepend: true");
+assert.deepEqual(schema({ buttons: [{ name: "a", prompt: "p", prepend: false }] }).buttons,
+	[{ name: "a", prompt: "p", autoSend: false }],
+	"schema 归一化剥除显式 false（键出现当且仅当 true）");
 
 /* ── 7. 分层合并：base(组合层) 与用户层 buttons 覆盖语义（dsh-settings resolve 管线） ── */
 function mergeLayers(base, section) {

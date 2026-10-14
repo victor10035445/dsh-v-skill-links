@@ -79,6 +79,18 @@ assert.ok(code.includes('"conversation.composer.dock"'), "注册输入卡片下�
 assert.ok(code.includes('const DOCK_ID = "v-quick-buttons"') && code.includes("id: DOCK_ID"), "dock 条目 id（与官方 stats 行并肩）");
 assert.ok(code.includes("order: -1"), "dock 紧贴输入卡片（stats=0 在其下）");
 assert.ok(code.includes("QuickButtonsGrid") && code.includes("createButtonsStore") && code.includes("appendPrompt"), "dock 组件 / 快照 store / 追加语义齐备");
+/* 前插方向（add-quick-button-prepend，design D2/D3/D4）：对称纯函数 + 方向实参 + 行内勾选框 + 条件键 */
+assert.ok(code.includes("function prependPrompt(draft, prompt)") && code.includes("exports.prependPrompt = prependPrompt"),
+	"前插纯函数存在并导出（appendPrompt 既有导出保留，MUST NOT 被替换）");
+assert.ok(code.includes("exports.appendPrompt = appendPrompt"), "appendPrompt 导出保持不破（既有冒烟依赖）");
+assert.ok(code.includes("button.prepend === true ? prependPrompt(draft, button.prompt) : appendPrompt(draft, button.prompt)"),
+	"activate 仅按 prepend 选 setDraft 实参（其余时序不动）");
+assert.ok(code.includes('field === "prepend"') && code.includes("buttonEntry({ ...b, prepend: value })"),
+	"editButton 对 prepend 走条件键特判（取消勾选删键，对齐 model 字段断言模式）");
+assert.ok(code.includes("if (b.prepend === true) entry.prepend = true") && code.includes("if (source.prepend === true) entry.prepend = true"),
+	"buttonEntry / save 条件写出 prepend（未勾选 MUST NOT 输出该键）");
+assert.ok(code.includes('"prependLabel"') && code.includes("prependTitle"), "词典含前插键（勾选框文案与组合语义 title）");
+assert.ok(code.includes('editButton(index, "prepend", event.target.checked)'), "行内勾选框提交 field=prepend（暂存-保存模型）");
 assert.ok(code.includes("inputActions.setDraft(") && code.includes("inputActions.submit()"), "点击走 InputActions 正门（追加 / 等同回车）");
 assert.ok(code.includes("installDockCss") && code.includes("v-qb-grid") && code.includes("v-qb-btn") && code.includes("v-qb-label"), "dock 自有稳定 class（用户美化钩子）");
 assert.ok(code.includes('"data-v-button"'), "按钮带 data-v-button 属性");

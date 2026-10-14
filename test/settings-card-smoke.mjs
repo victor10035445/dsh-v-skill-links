@@ -318,6 +318,99 @@ face.discard();
 assert.deepEqual(face.getSnapshot().buttonsDraft[0].model,
 	{ provider: "p1", model: "m-a", reasoningEffort: "max" }, "放弃修改回退到生效绑定");
 
+/* ── 1.7 按钮「前插」勾选框（add-quick-button-prepend）：UI 位置 / 草稿 / dirty 回清 / 保存 / 回退 / 禁用 ── */
+const quickFace = registeredTabs.find((t) => t.options.id === "quick").options.inject().face;
+/* 面板渲染用假 face：editButton 只记录调用（渲染断言与控制器断言分离）。 */
+const panelFace = (over = {}, edits = []) => ({
+	getSnapshot: () => ({ ...quickFace.getSnapshot(), ...over }),
+	subscribe: () => () => {},
+	editButton: (i, f, v) => edits.push([i, f, v]),
+});
+/** QuickPanel 返回外层 div.v-sm-panel，按钮行 div.v-sc-row 在其中。
+    react 桩把 children 放在 el.children（props.children 可能缺席）——与 dock 冒烟同款兜底。 */
+const flatKids = (el) => [].concat(el.props.children !== undefined ? el.props.children : (el.children ?? [])).flat()
+	.filter((c) => c !== false && c !== null && c !== undefined && c !== true);
+const rowsOf = (panel) => flatKids(panel).filter((c) => c.props && c.props.className === "v-sc-row");
+const rowHeadOf = (row) => flatKids(row).find((c) => c.props && c.props.className === "v-sc-rowHead");
+const headKids = (row) => flatKids(rowHeadOf(row));
+/** 行首勾选框（label.v-sc-auto）：按渲染顺序 [前插, 自动发送]（label 内首个子元素即 input）。 */
+const rowCheckLabels = (row) => headKids(row).filter((c) => c.props && c.props.className === "v-sc-auto");
+const rowChecks = (row) => rowCheckLabels(row).map((label) => flatKids(label)[0]);
+/* 渲染位置：「前插」勾选框在「自动发送」之前；label 文案走词典键。 */
+const checkEdits = [];
+const checkPanel = plugin.QuickPanel({ t: (k) => k, face: panelFace({
+	buttonsDraft: [{ name: "A", prompt: "pa", autoSend: false }, { name: "B", prompt: "pb", autoSend: false, prepend: true }],
+}, checkEdits) });
+const checkRows = rowsOf(checkPanel);
+const labelsOf = (row) => headKids(row)
+	.filter((c) => c.props && c.props.className === "v-sc-auto")
+	.map((label) => flatKids(label).at(-1));
+assert.deepEqual(labelsOf(checkRows[0]), ["prependLabel", "autoSendLabel"], "「前插」勾选框渲染于「自动发送」之前（词典键）");
+const boxes = rowChecks(checkRows[0]);
+assert.equal(boxes[0].props.type, "checkbox", "前插为原生勾选框");
+assert.equal(boxes[0].props.checked, false, "缺省不勾选（缺省 = 后插）");
+assert.equal(rowChecks(checkRows[1])[0].props.checked, true, "prepend: true 回显为勾选态");
+assert.equal(boxes[0].props.disabled, false, "可写且非保存中 → 勾选框可用");
+assert.equal(typeof rowCheckLabels(checkRows[0])[0].props.title, "string", "勾选框 label 带 title 提示（组合语义说明）");
+boxes[0].props.onChange({ target: { checked: true } });
+assert.deepEqual(checkEdits.at(-1), [0, "prepend", true], "onChange 提交 field=prepend 的布尔值（face.editButton）");
+assert.equal(rowHeadOf(checkRows[0]).props.className, "v-sc-rowHead", "勾选框落在行首控件组内（行布局未新增分支）");
+/* 不可写 / 保存中：与行内既有控件同禁用 */
+for (const over of [{ writable: false }, { saving: true }]) {
+	const disabledHead = rowChecks(rowsOf(plugin.QuickPanel({ t: (k) => k, face: panelFace({ ...over, buttonsDraft: [{ name: "A", prompt: "pa", autoSend: false }] }) }))[0]);
+	assert.equal(disabledHead[0].props.disabled, true, "不可写 / 保存中 → 前插勾选框禁用");
+	assert.equal(disabledHead[1].props.disabled, true, "同档位：自动发送勾选框同样禁用（口径一致）");
+}
+/* 控制器路径：editButton("prepend", true) 草稿生效并翻 dirty → 再次 false 删键且 dirty 回清 */
+snap = { ...snap, value: { ...snap.value, buttons: [{ name: "前插测试", prompt: "p", autoSend: false }] } };
+for (const l of [...scopeListeners]) l();
+assert.equal(face.getSnapshot().buttonsDirty, false, "初始：草稿与生效值逐字一致（不脏）");
+face.editButton(0, "prepend", true);
+assert.equal(face.getSnapshot().buttonsDraft[0].prepend, true, "勾选前插进草稿");
+assert.deepEqual(Object.keys(face.getSnapshot().buttonsDraft[0]), ["name", "prompt", "autoSend", "prepend"], "草稿键序 name → prompt → autoSend → prepend（未绑定无 model 键）");
+assert.equal(face.getSnapshot().buttonsDirty, true, "勾选前插翻 dirty");
+face.editButton(0, "prepend", false);
+assert.ok(!("prepend" in face.getSnapshot().buttonsDraft[0]), "取消勾选 MUST 删除 prepend 键（不留 prepend: false）");
+assert.equal(face.getSnapshot().buttonsDirty, false, "取消勾选后 buttonsDirty 精确回清（与生效值逐字同形）");
+/* 保存：勾选条目写出 prepend: true；未勾选条目 MUST NOT 输出该键 */
+face.editButton(0, "prepend", true);
+face.addButton();
+face.editButton(1, "name", "后插测试");
+face.editButton(1, "prompt", "p2");
+await face.save();
+const prependWrite = calls.set.filter(([field]) => field === "buttons").at(-1);
+assert.deepEqual(prependWrite[1], [
+	{ name: "前插测试", prompt: "p", autoSend: false, prepend: true },
+	{ name: "后插测试", prompt: "p2", autoSend: false },
+], "保存：勾选条目写 prepend: true，未勾选条目 MUST NOT 输出该键");
+assert.ok(!("prepend" in prependWrite[1][1]), "未勾选条目无 prepend 键（存储形状最小）");
+assert.equal(face.getSnapshot().buttonsDirty, false, "保存后按钮暂存清空");
+/* 生效值携带 prepend → 草稿跟随；放弃修改回退；重置按钮回退组合层 */
+snap = { ...snap, value: { ...snap.value, buttons: [{ name: "前插测试", prompt: "p", autoSend: false, prepend: true }] } };
+for (const l of [...scopeListeners]) l();
+assert.equal(face.getSnapshot().buttonsDraft[0].prepend, true, "生效 prepend 随 settingsScope 跟进草稿");
+face.editButton(0, "prepend", false);
+assert.equal(face.getSnapshot().buttonsDirty, true, "取消勾选（生效值为 true）翻 dirty");
+face.discard();
+assert.equal(face.getSnapshot().buttonsDraft[0].prepend, true, "放弃修改回退到生效勾选态");
+assert.equal(face.getSnapshot().buttonsDirty, false, "放弃修改后不脏");
+face.editButton(0, "prepend", false);
+assert.equal(face.getSnapshot().buttonsDirty, true, "重置前草稿为脏（暂存待清）");
+/* 本 mock 的 scope.unset 只清 user 层；真实宿主里生效值随回落组合层重算，这里显式补上该步
+   ——重置断言的是「草稿回到组合层形状且不留 prepend: false 残留」。 */
+const unsetBeforeReset = calls.unset.length;
+snap = { ...snap, value: { ...snap.value, buttons: [{ name: "前插测试", prompt: "p", autoSend: false }] } };
+await face.resetButtons();
+assert.deepEqual(calls.unset.slice(unsetBeforeReset), ["buttons"], "重置按钮走 unset(\"buttons\")");
+assert.equal(face.getSnapshot().buttonsOverridden, false, "重置按钮回退组合层覆盖");
+assert.ok(!("prepend" in face.getSnapshot().buttonsDraft[0]), "重置后草稿回到组合层形状（无 prepend 键，不留 prepend: false）");
+assert.equal(face.getSnapshot().buttonsDirty, false, "重置后暂存清空（草稿与组合层逐字同形）");
+
+/* 段级重置动作从零起算（第 1.7 段已单独覆盖 resetButtons，不污染下面 6 段的动作序列断言）。 */
+const resetLog = [];
+const rawUnset = scope.unset;
+scope.unset = async (field) => { resetLog.push(field); return rawUnset(field); };
+
 /* ── 2. 作用域变更跟随（目录 + 指令） ── */
 snap = { ...snap, value: { directories: ["F:/x", "F:/y"], commands: [{ name: "greet", prompt: "p1" }, { name: "ship", prompt: "p2" }] } };
 for (const l of [...scopeListeners]) l();
@@ -363,12 +456,12 @@ assert.equal(face.getSnapshot().dirty, false, "放弃修改清全部暂存");
 
 /* ── 6. resetField / resetCommands / resetButtons 走 unset ── */
 await face.resetField();
-assert.deepEqual(calls.unset, ["directories"]);
+assert.deepEqual(resetLog, ["directories"]);
 await face.resetCommands();
-assert.deepEqual(calls.unset, ["directories", "commands"]);
+assert.deepEqual(resetLog, ["directories", "commands"]);
 assert.equal(face.getSnapshot().commandsOverridden, false, "重置后无 commands 覆盖");
 await face.resetButtons();
-assert.deepEqual(calls.unset, ["directories", "commands", "buttons"]);
+assert.deepEqual(resetLog, ["directories", "commands", "buttons"]);
 assert.equal(face.getSnapshot().buttonsOverridden, false, "重置后无 buttons 覆盖");
 
 /* ── 6.5 dock 槽位注册契约：conversation.composer.dock + inject 提供按钮快照 face ── */

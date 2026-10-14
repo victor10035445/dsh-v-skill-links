@@ -16,7 +16,7 @@ Three capabilities on a shared base:
 |---|---|---|
 | **Mapped Skills** | `/` menu "Mapped Skills" group | Picking inserts `/name `; the matching `SKILL.md` is injected in full on send |
 | **Custom Commands** | `/` menu "Custom Commands" group | Picking **immediately sends the Prompt** into the current session as a user message |
-| **Quick Buttons** | Button grid below the composer | Click **appends** the Prompt to the draft (keep editing); optional **auto-send** (equals Enter); a model + reasoning effort may be bound |
+| **Quick Buttons** | Button grid below the composer | Click **fills the Prompt along its direction** (appended by default, **prepend** optional; keep editing); optional **auto-send** (equals Enter); a model + reasoning effort may be bound |
 
 Shared traits:
 
@@ -84,6 +84,9 @@ Edit `$DSH_HOME\profiles\web\cordis.patch.yml` (your patch layer, append an entr
       - name: New
         prompt: Use the xxx skill to do xxx
         autoSend: true              # send immediately after inserting
+      - name: Translate
+        prompt: "Translate the following into English:"
+        prepend: true               # optional: prepend to the front of the draft (absent = append)
       - name: Review
         prompt: Please use /code-review to review current changes
         model:                      # optional: bound model (absent = follow the session model)
@@ -98,17 +101,17 @@ For daily use, prefer the **visual settings page** (sidebar gear → **Settings 
 
 - **Skill Mapping**: one directory per line, effective on save;
 - **Custom Commands**: maintain name (lowercase `a-z 0-9 _ -`) + Prompt;
-- **Quick Buttons**: maintain name (Chinese allowed) + Prompt + auto-send checkbox + **model / effort dropdowns** (candidates come from the same source as the session model menu; the effort dropdown appears only when the picked model carries reasoning levels and defaults to the highest; the first item "follow session model (default)" means unbound); drag the row handle or use "Move up / Move down" to reorder;
+- **Quick Buttons**: maintain name (Chinese allowed) + Prompt + **prepend** checkbox + auto-send checkbox + **model / effort dropdowns** (candidates come from the same source as the session model menu; the effort dropdown appears only when the picked model carries reasoning levels and defaults to the highest; the first item "follow session model (default)" means unbound); drag the row handle or use "Move up / Move down" to reorder;
 - The three tabs share one staged draft; "Save" on any tab writes everything; "Reset" falls back to the patch-file config.
 
 ### Model-bound buttons
 
-Every quick button may bind `{ provider, model, reasoningEffort? }`; clicking appends the Prompt **and** switches that session to the bound model:
+Every quick button may bind `{ provider, model, reasoningEffort? }`; clicking fills the Prompt along the button's direction **and** switches that session to the bound model:
 
 - **Unbound = follow the session**: the click never touches the model — behavior is byte-for-byte the old version;
 - **No switching back after send**: the switch persists inside the session, later manual sends keep using that model; clicking another bound button later wins;
 - **autoSend switches before sending**: the submit waits for the switch, so that turn definitely uses the bound model; unbound buttons gain no extra wait;
-- **Failures never block**: retired model/effort or an unavailable connection → a toast, the Prompt is still appended; with autoSend the message goes out with the session's current model and the draft is never lost; subagent sessions skip the switch silently (no error);
+- **Failures never block**: retired model/effort or an unavailable connection → a toast, the Prompt is still filled along the button's direction; with autoSend the message goes out with the session's current model and the draft is never lost; subagent sessions skip the switch silently (no error);
 - **Click guard**: clicks during an in-flight switch (and its submit) are ignored — no "second switch + first submit" mismatch;
 - **Catalog degradation**: if the client remote is unavailable or the catalog fails to load, the settings row offers only "follow session model" plus a hint; bindings that vanished from the catalog are echoed as-is with an "unavailable" marker and are never silently rewritten.
 
@@ -164,7 +167,18 @@ patch layer cordis.patch.yml entry config  →  legacy user document (settings.y
 
 **Custom Commands**: pick and it sends — great for one-click fixed routines; `/mapped-skill-name` tokens in the Prompt trigger the corresponding SKILL.md injection.
 
-**Quick Buttons**: click to append (Ctrl/Cmd+Z undoes as a whole), auto-send equals Enter; display order follows the settings order, re-ordering applies on save. Buttons may bind a model and reasoning effort (see "Model-bound buttons") — unbound means following the session model.
+**Quick Buttons**: click to fill the Prompt along the button's direction — appended by default, or **prepended** (placed at the very front) when the "Prepend" checkbox is ticked; Ctrl/Cmd+Z undoes as a whole, auto-send equals Enter; display order follows the settings order, re-ordering applies on save. Buttons may bind a model and reasoning effort (see "Model-bound buttons") — unbound means following the session model.
+
+### Button fill direction (append / prepend)
+
+Every quick button may tick **"Prepend"** (the checkbox sits left of "Auto-send" in the settings page):
+
+- **Unchecked by default = append** (unchanged): with a non-empty draft the Prompt goes to the end, `draft + "\n" + Prompt`;
+- **Checked = prepend**: the Prompt lands at the very front, `Prompt + "\n" + draft` — ideal for "instruction first, content after" (e.g. `Translate into English:` + the existing draft);
+- **With an empty draft both directions are identical**: the Prompt is filled verbatim, no stray newline;
+- **Clicking several prepend buttons in a row**: the last click stays closest to the front of the draft;
+- **Prepend + auto-send**: prepend first, then send the whole final draft (the entire draft, not just the Prompt);
+- One click is still a single fill transaction (Ctrl/Cmd+Z reverts it in one step), and buttons without "Prepend" behave exactly as before.
 
 ### Quick Buttons vs Custom Commands
 
@@ -172,10 +186,11 @@ patch layer cordis.patch.yml entry config  →  legacy user document (settings.y
 |---|---|---|
 | Entry | Grid below the composer, always visible | `/` menu "Custom Commands" group |
 | Name | Display label, Chinese allowed | Token name, lowercase `a-z 0-9 _ -` |
-| Click behavior | **Append to draft** (keep editing) | **Send immediately** (bypasses the draft) |
+| Click behavior | **Fill along the direction** (append by default, prepend optional; keep editing) | **Send immediately** (bypasses the draft) |
+| Fill direction | Append (default) / prepend selectable | N/A |
 | Auto-send | Optional checkbox | Inherently sends |
 | Model binding | Model + effort bindable | Unbound (follows the session) |
-| Best for | Drafting templates / referencing a skill then adding words | One-click fixed routines |
+| Best for | Drafting templates / referencing a skill then adding words / putting an instruction before an existing draft | One-click fixed routines |
 
 ## Architecture
 
@@ -202,7 +217,7 @@ Zero npm dependencies, zero build steps — two entries + one manifest:
 - **Custom Commands**: never enter the host command registry; execution requires an **active agent** in the session (not-yet-restored sub-agent sessions get a 404 hint);
 - **Injection is not replayed**: injection happens only on the step where the message enters; after session restore, historical tokens are not re-injected (consistent with the native gesture);
 - **First-level subdirectories only**: deeper directories are not indexed;
-- **Button grid scope**: the grid also appears below sub-agent session composers (the dock is session-scoped, config is global); when the composer is blocked by other plugins, buttons remain clickable and append to a temporarily invisible draft — visible and undoable once the block clears;
+- **Button grid scope**: the grid also appears below sub-agent session composers (the dock is session-scoped, config is global); when the composer is blocked by other plugins, buttons remain clickable and fill along their direction into a temporarily invisible draft — visible and undoable once the block clears;
 - **Style overrides**: the `.v-qb-*` hooks rely on "plugin style tags append at the end of head, same specificity means later wins"; hover hints use native `title`;
 - **Config consistency between desktop and web**: both share `$DSH_HOME/v-skill-links.config.json` (see "Shared configuration across web and desktop"); config is written to the shared store **only through the settings page** — hand-editing `settings.yaml` only affects sections the shared store does **not** have (a same-named section is masked by the store, and the value is not lost);
 - **Rolling back to an older plugin version**: the shared store file is ignored (lazily kept, never deleted) by older code; changes that went only through the new settings page and never reached the patch layer or the user document stop showing after a rollback — merge them back into the `cordis.patch.yml` entry config by hand if needed.

@@ -1,6 +1,6 @@
 /**
  * 快捷按钮客户端冒烟：物化客户端 factory（捕获 __ModuleLoader__.load），验证——
- *  1. appendPrompt 纯函数（空草稿填入 / 非空追加 \n / 非字符串兜底）；
+ *  1. appendPrompt / prependPrompt 纯函数（空草稿填入 / 非空追加与头插 \n / 非字符串兜底）；
  *  2. buttonsSectionOf 投影（空节 / 旧文档兼容 / 残缺条目丢弃 / autoSend 归一）；
  *  3. createButtonsStore（scope 快照投影 + 订阅跟随 + dispose）；
  *  4. dock 注册契约（composer.dock + input.dock hero 双条目：id / order / locale / inject 快照 face /
@@ -76,10 +76,22 @@ const modelGroups = [
 	] },
 ];
 
-/* ── 1. appendPrompt 纯函数（spec「点击填入」口径） ── */
+/* ── 1. appendPrompt / prependPrompt 纯函数（spec「点击填入语义（追加/前插）」口径） ── */
 assert.equal(plugin.appendPrompt("", "使用 xxx 技能"), "使用 xxx 技能", "空草稿直接填入");
 assert.equal(plugin.appendPrompt("帮我看看", "使用 xxx 技能"), "帮我看看\n使用 xxx 技能", "非空草稿换行追加");
 assert.equal(plugin.appendPrompt(undefined, "p"), "p", "非字符串草稿按空处理");
+/* 前插对称纯函数（add-quick-button-prepend design D2）：空草稿与追加同结果，非空头插 \n。 */
+assert.equal(typeof plugin.prependPrompt, "function", "prependPrompt 已导出（冒烟直测）");
+assert.equal(plugin.prependPrompt("", "请翻译成英文："), "请翻译成英文：", "空草稿直接填入（两方向同结果）");
+assert.equal(plugin.prependPrompt("帮我看看", "请翻译成英文："), "请翻译成英文：\n帮我看看", "非空草稿头插（prompt 在最前）");
+assert.equal(plugin.prependPrompt(undefined, "p"), "p", "非字符串草稿按空处理（兜底不抛错）");
+assert.equal(plugin.prependPrompt(null, "p"), "p", "null 草稿同样按空处理");
+assert.equal(plugin.prependPrompt("帮我看看", ""), "\n帮我看看", "空 prompt 与空草稿不同支（与 appendPrompt 同口径，不做空串特判）");
+assert.equal(
+	plugin.prependPrompt("帮我看看", "请翻译成英文："),
+	"请翻译成英文：\n帮我看看",
+	"分隔符与非空口径与 appendPrompt 互指（共用「非空以 \\n 相接」约定）",
+);
 
 /* ── 2. buttonsSectionOf 投影 ── */
 assert.deepEqual(plugin.buttonsSectionOf(undefined), [], "无节 → 空列表");
@@ -537,6 +549,80 @@ await new Promise((r) => setImmediate(r));
 assert.equal(act5.calls.submit, 1, "首个点击序列按既定口径完成（仅一次提交）");
 btn5.props.onClick();
 assert.equal(sw5.calls.length, 2, "序列结束后恢复可点击");
+
+/* ── 5i. 点击方向语义（add-quick-button-prepend，spec「点击填入语义（追加/前插）」） ── */
+/* 草稿夹具：组件闭包读当帧草稿（inputRef 每帧刷新），点击后草稿推进以验证方向与堆叠。 */
+const dirState = { draft: "" };
+const dirActions = { setDraft: [], submit: 0 };
+const dirStore = (draft) => plugin.createButtonsStore({
+	getSnapshot: () => ({ status: "ready", value: { buttons: draft } }),
+	subscribe: () => () => {},
+});
+const dirGrid = (draft) => Grid({
+	useInput: (selector) => selector({ draft: dirState.draft, phase: "plain" }),
+	inputActions: { setDraft: (t) => { dirActions.setDraft.push(t); dirState.draft = t; }, submit: () => { dirActions.submit += 1; } },
+	buttons: dirStore(draft),
+	t: (k) => k,
+});
+/* 5i-1. 草稿为空：普通按钮与前插按钮结果一致（无前导/尾随换行，且不发送）。 */
+const emptyGrid = dirGrid([{ name: "普通", prompt: "使用 xxx 技能做 xxx 事" }, { name: "前插", prompt: "使用 xxx 技能做 xxx 事", prepend: true }]);
+dirState.draft = "";
+childrenOf(emptyGrid)[0].props.onClick();
+assert.deepEqual(dirActions.setDraft, ["使用 xxx 技能做 xxx 事"], "空草稿普通按钮直接填入（无孤立换行）");
+dirState.draft = "";
+childrenOf(emptyGrid)[1].props.onClick();
+assert.deepEqual(dirActions.setDraft.at(-1), "使用 xxx 技能做 xxx 事", "空草稿前插按钮同结果");
+assert.equal(dirActions.submit, 0, "两方向均不触发发送");
+/* 5i-2. 非空草稿：缺省方向仍为后插（回归不变）。 */
+dirActions.setDraft.length = 0;
+dirState.draft = "帮我看看";
+childrenOf(dirGrid([{ name: "翻译", prompt: "请翻译成英文：" }]))[0].props.onClick();
+assert.deepEqual(dirActions.setDraft, ["帮我看看\n请翻译成英文："], "未勾选 prepend 的点击路径回归不变（后插）");
+/* 5i-3. 非空草稿 + prepend: true → 头插。 */
+dirActions.setDraft.length = 0;
+dirState.draft = "帮我看看";
+childrenOf(dirGrid([{ name: "翻译", prompt: "请翻译成英文：", prepend: true }]))[0].props.onClick();
+assert.deepEqual(dirActions.setDraft, ["请翻译成英文：\n帮我看看"], "勾选前插 → prompt 位于草稿最前且不发送");
+assert.equal(dirActions.submit, 0, "前插不触发发送");
+/* 5i-4. 连续两颗前插按钮：后点在最前（spec「连续前插后点在最前」）。
+   真实会话里 setDraft 后组件随 InputState 重渲染、闭包取到新草稿——这里每次点击前重建
+   网格以复现同一节奏（单实例连点在 React 里同样只会看到旧草稿）。 */
+dirActions.setDraft.length = 0;
+dirState.draft = "帮我看看";
+const stackButtons = [{ name: "A", prompt: "A", prepend: true }, { name: "B", prompt: "B", prepend: true }];
+childrenOf(dirGrid(stackButtons))[0].props.onClick();
+childrenOf(dirGrid(stackButtons))[1].props.onClick();
+assert.deepEqual(dirActions.setDraft, ["A\n帮我看看", "B\nA\n帮我看看"], "连续前插：后点的 B 位于最前（零特殊排序处理）");
+assert.equal(dirActions.submit, 0, "堆叠过程不发送");
+/* 5i-5. 前插 + autoSend：先前插后提交，submit 恰好一次且发送草稿为前插结果。 */
+dirActions.setDraft.length = 0;
+dirActions.submit = 0;
+dirState.draft = "帮我看看";
+childrenOf(dirGrid([{ name: "翻译", prompt: "请翻译成英文：", prepend: true, autoSend: true }]))[0].props.onClick();
+assert.deepEqual(dirActions.setDraft, ["请翻译成英文：\n帮我看看"], "前插 + autoSend：先完成前插");
+assert.equal(dirActions.submit, 1, "前插 + autoSend：前插后提交恰好一次");
+assert.equal(dirState.draft, "请翻译成英文：\n帮我看看", "提交的是填入后整个输入区的最终草稿");
+/* 5i-6. 前插 + autoSend + 绑定模型：仍先切后发（方向与模型时序正交）。 */
+const swDir = makeSwitch();
+const dirActBound = makeActions();
+const dirStateBound = { draft: "帮我看看" };
+const boundPrependGrid = Grid({
+	useInput: (selector) => selector({ draft: dirStateBound.draft, phase: "plain" }),
+	inputActions: { setDraft: (t) => { dirActBound.calls.setDraft.push(t); dirStateBound.draft = t; }, submit: dirActBound.submit },
+	buttons: dirStore([{ name: "翻译", prompt: "请翻译成英文：", prepend: true, autoSend: true, model: { provider: "p1", model: "m-a", reasoningEffort: "max" } }]),
+	sessionId: "s-1",
+	canSwitch: true,
+	switchModel: swDir.switchModel,
+	notify: () => {},
+	t: (k) => k,
+});
+childrenOf(boundPrependGrid)[0].props.onClick();
+assert.deepEqual(dirActBound.calls.setDraft, ["请翻译成英文：\n帮我看看"], "绑定模型 + 前插：先前插填入");
+assert.equal(swDir.calls.length, 1, "绑定模型 + 前插：发起切换");
+assert.equal(dirActBound.calls.submit, 0, "切换完成前 MUST NOT 提交（方向与时序正交）");
+swDir.settle({ ok: true, error: "" });
+await new Promise((r) => setImmediate(r));
+assert.equal(dirActBound.calls.submit, 1, "切换完成后提交前插结果");
 
 /* ── 6. QuickPanel 排序控件形态（add-quick-buttons-reorder，design D2/D3）：把手 / ↑↓ 按钮 ── */
 const mkQuickState = (over = {}) => ({
